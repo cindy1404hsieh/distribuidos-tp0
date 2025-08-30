@@ -59,10 +59,14 @@ def generate_docker_compose(output_file, client_count):
         f.write('\n')  # Add final newline
     
     print(f"Generated {output_file} with {client_count} clients:")
-    print(f"  - Server with config volume: ./server/config.ini:/config.ini")
-    print(f"  - Clients with config volume: ./client/config.yaml:/config.yaml")
-    for i in range(1, client_count + 1):
-        print(f"  - client{i}")
+    if client_count > 0:
+        print(f"  - Server with config volume: ./server/config.ini:/config.ini")
+        print(f"  - Clients with config volume: ./client/config.yaml:/config.yaml")
+        for i in range(1, client_count + 1):
+            print(f"  - client{i}")
+    else:
+        print(f"  - Server only (no clients)")
+        print(f"  - Server with config volume: ./server/config.ini:/config.ini")
 
 def main():
     if len(sys.argv) != 3:
@@ -74,8 +78,8 @@ def main():
     
     try:
         client_count = int(sys.argv[2])
-        if client_count < 1:
-            raise ValueError("Number of clients must be at least 1")
+        if client_count < 0:
+            raise ValueError("Number of clients must be non-negative")
     except ValueError as e:
         print(f"Error: Invalid number of clients - {e}")
         sys.exit(1)
