@@ -1,4 +1,5 @@
 #!/bin/bash
+
 # Check if the correct number of arguments is provided
 if [ "$#" -ne 2 ]; then
     echo "Usage: $0 <output_file> <client_count>"
@@ -9,9 +10,9 @@ fi
 OUTPUT_FILE=$1
 CLIENT_COUNT=$2
 
-# Validate that client count is a positive integer
-if ! [[ "$CLIENT_COUNT" =~ ^[0-9]+$ ]] || [ "$CLIENT_COUNT" -eq 0 ]; then
-    echo "Error: Client count must be a positive integer"
+# Validate that client count is a non-negative integer (0 or more)
+if ! [[ "$CLIENT_COUNT" =~ ^[0-9]+$ ]]; then
+    echo "Error: Client count must be a non-negative integer"
     exit 1
 fi
 
