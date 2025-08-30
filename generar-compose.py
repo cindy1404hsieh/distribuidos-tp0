@@ -4,7 +4,7 @@ import sys
 def generate_docker_compose(output_file, client_count):
     """
     Generates a docker-compose.yaml file with the specified number of clients.
-    Manually creates YAML content without external dependencies.
+    Includes volumes for external configuration files.
     """
     
     # Build the YAML content manually
@@ -13,7 +13,6 @@ def generate_docker_compose(output_file, client_count):
     # Header and services
     yaml_content.append("name: tp0")
     yaml_content.append("services:")
-
     # Server configuration with volume
     yaml_content.append("  server:")
     yaml_content.append("    container_name: server")
@@ -21,7 +20,6 @@ def generate_docker_compose(output_file, client_count):
     yaml_content.append("    entrypoint: python3 /main.py")
     yaml_content.append("    environment:")
     yaml_content.append("      - PYTHONUNBUFFERED=1")
-    yaml_content.append("      - LOGGING_LEVEL=DEBUG")
     yaml_content.append("    networks:")
     yaml_content.append("      - testing_net")
     yaml_content.append("    volumes:")
@@ -37,13 +35,12 @@ def generate_docker_compose(output_file, client_count):
         yaml_content.append("    entrypoint: /client")
         yaml_content.append("    environment:")
         yaml_content.append(f"      - CLI_ID={i}")
-        yaml_content.append("      - CLI_LOG_LEVEL=DEBUG")
         yaml_content.append("    networks:")
         yaml_content.append("      - testing_net")
         yaml_content.append("    depends_on:")
         yaml_content.append("      - server")
         yaml_content.append("    volumes:")
-        yaml_content.append(f"      - ./client/config.yaml:/config.yaml")
+        yaml_content.append("      - ./client/config.yaml:/config.yaml")
         if i < client_count:  # Add empty line between clients except for the last one
             yaml_content.append("")
     
@@ -63,7 +60,7 @@ def generate_docker_compose(output_file, client_count):
     
     print(f"Generated {output_file} with {client_count} clients:")
     print(f"  - Server with config volume: ./server/config.ini:/config.ini")
-    print(f"  - Each client with config volume: ./client/config.yaml:/config.yaml")
+    print(f"  - Clients with config volume: ./client/config.yaml:/config.yaml")
     for i in range(1, client_count + 1):
         print(f"  - client{i}")
 
