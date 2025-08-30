@@ -13,8 +13,8 @@ def generate_docker_compose(output_file, client_count):
     # Header and services
     yaml_content.append("name: tp0")
     yaml_content.append("services:")
-    
-    # Server configuration
+
+    # Server configuration with volume
     yaml_content.append("  server:")
     yaml_content.append("    container_name: server")
     yaml_content.append("    image: server:latest")
@@ -24,9 +24,11 @@ def generate_docker_compose(output_file, client_count):
     yaml_content.append("      - LOGGING_LEVEL=DEBUG")
     yaml_content.append("    networks:")
     yaml_content.append("      - testing_net")
+    yaml_content.append("    volumes:")
+    yaml_content.append("      - ./server/config.ini:/config.ini")
     yaml_content.append("")
     
-    # Generate clients dynamically
+    # Generate clients dynamically with volumes
     for i in range(1, client_count + 1):
         client_name = f"client{i}"
         yaml_content.append(f"  {client_name}:")
@@ -40,6 +42,8 @@ def generate_docker_compose(output_file, client_count):
         yaml_content.append("      - testing_net")
         yaml_content.append("    depends_on:")
         yaml_content.append("      - server")
+        yaml_content.append("    volumes:")
+        yaml_content.append(f"      - ./client/config.yaml:/config.yaml")
         if i < client_count:  # Add empty line between clients except for the last one
             yaml_content.append("")
     
@@ -58,6 +62,8 @@ def generate_docker_compose(output_file, client_count):
         f.write('\n')  # Add final newline
     
     print(f"Generated {output_file} with {client_count} clients:")
+    print(f"  - Server with config volume: ./server/config.ini:/config.ini")
+    print(f"  - Each client with config volume: ./client/config.yaml:/config.yaml")
     for i in range(1, client_count + 1):
         print(f"  - client{i}")
 
