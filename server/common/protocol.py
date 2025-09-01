@@ -12,14 +12,14 @@ class ProtocolError(Exception):
 
 # serialize
 def pack_string(s: str) -> bytes:
-    """Empaqueta string como [largo(2B)][datos]"""
+    """Packet string as [length(2B)][data]"""
     encoded = s.encode(ENCODING)
     if len(encoded) > 255:  # Usamos 1 byte para largo
         raise ProtocolError(f"String too long: {len(encoded)} bytes")
     return struct.pack('!B', len(encoded)) + encoded
 
 def unpack_string(data: bytes, offset: int = 0) -> Tuple[str, int]:
-    """Desempaqueta string, retorna (string, bytes_consumidos)"""
+    """Unpack string, returns (string, bytes_consumed)"""
     length = data[offset]
     offset += 1
     string = data[offset:offset+length].decode(ENCODING)
@@ -28,8 +28,8 @@ def unpack_string(data: bytes, offset: int = 0) -> Tuple[str, int]:
 def serialize_bet(agency_id: int, first_name: str, last_name: str, 
                   dni: str, birth_date: str, number: int) -> bytes:
     """
-    Serializa una apuesta individual
-    Formato: [agency(1B)][nombre][apellido][dni_str][fecha(10B)][numero(4B)]
+    Serialize a single bet
+    Format: [agency(1B)][name][surname][dni_str][date(10B)][number(4B)]
     """
     buf = bytearray()
     
@@ -52,7 +52,7 @@ def serialize_bet(agency_id: int, first_name: str, last_name: str,
     return bytes(buf)
 
 def deserialize_bet(data: bytes) -> dict:
-    """Deserializa una apuesta desde bytes"""
+    """Deserialize a single bet from bytes"""
     offset = 0
     
     # Agency ID
@@ -110,7 +110,7 @@ def recv_exact(sock: socket.socket, size: int) -> bytes:
 
 def send_message(sock: socket.socket, message: bytes) -> None:
     """
-    Envía mensaje con formato: [tamaño(2B)][datos]
+    Send message with format: [size(2B)][data]
     """
     if len(message) > MAX_MESSAGE_SIZE:
         raise ProtocolError(f"Message too large: {len(message)} bytes")
