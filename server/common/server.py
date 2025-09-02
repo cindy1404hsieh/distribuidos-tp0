@@ -2,7 +2,7 @@ import socket
 import logging
 import signal
 import sys
-from .protocol import receive_single_bet, ProtocolError
+from .protocol import receive_single_bet
 from .utils import Bet, store_bets
 
 class Server:
@@ -84,7 +84,7 @@ class Server:
             logging.info(f"action: apuesta_almacenada | result: success | "
                         f"dni: {bet_data['dni']} | numero: {bet_data['number']}")
             
-        except ProtocolError as e:
+        except Exception as e:
             logging.error(f"action: receive_bet | result: fail | error: {e}")
         except Exception as e:
             logging.error(f"action: store_bet | result: fail | error: {e}")
