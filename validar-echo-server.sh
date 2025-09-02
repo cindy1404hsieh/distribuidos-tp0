@@ -1,6 +1,6 @@
 #!/bin/bash
 
-NETWORK_NAME="tp0_testing_net"
+NETWORK_NAME="testing_net"
 TEST_MSG="Hola mundo"
 RESPONSE=$(docker run --rm --network $NETWORK_NAME busybox sh -c "echo '$TEST_MSG' | nc server 12345")
 
