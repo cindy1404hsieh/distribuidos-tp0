@@ -20,19 +20,6 @@ chmod +x generar-compose.py
 # Ejemplo: generar 5 clientes
 ./generar-compose.sh docker-compose-dev.yaml 5
 ```
-
-## Decisiones de Diseño
-
-#### Decisión
-Se optó por generar el archivo YAML manualmente, línea por línea, sin usar la librería `pyyaml`, sin dependencias externas y tener un control total del formato. Se observo una reducción de tiempo de ejecución de los tests. 
-
-
-### Validación de Entrada
-
-El script valida:
-- Número correcto de argumentos
-- Cantidad de clientes debe ser un entero positivo
-- Mensajes de error descriptivos para guiar al usuario
  
 
 ## Testing
