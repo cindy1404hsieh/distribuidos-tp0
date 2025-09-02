@@ -94,21 +94,10 @@ class Server:
         """
         # Connection arrived
         logging.info('action: accept_connections | result: in_progress')
-        
-        # Set timeout to periodically check if we should shutdown
-        self._server_socket.settimeout(1.0)
-        
-        while self._running:
-            try:
-                c, addr = self._server_socket.accept()
-                logging.info(f'action: accept_connections | result: success | ip: {addr[0]}')
-                return c
-            except socket.timeout:
-                continue
-            except OSError:
-                # Socket was closed, exit gracefully
-                if not self._running:
-                    return None
-                raise
-        
-        return None
+        try:
+            c, addr = self._server_socket.accept()  # Bloquea hasta conexión o cierre
+            logging.info(f'action: accept_connections | result: success | ip: {addr[0]}')
+            return c
+        except OSError:
+            # Socket fue cerrado por SIGTERM
+            return None
