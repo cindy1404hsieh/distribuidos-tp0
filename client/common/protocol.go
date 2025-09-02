@@ -1,55 +1,55 @@
 package common
 
 import (
-	"bytes"
 	"encoding/binary"
 	"fmt"
-	"io"
 	"net"
 )
 
 const (
-	MaxMessageSize = 8192 // 8KB limit
-	Encoding       = "utf-8"
+	MaxMessageSize = 8192
 )
 
-// packString pack string as [lenght(1B)][data]
+// packString packs a string as [length(1B)][data]
 func packString(s string) []byte {
 	data := []byte(s)
 	if len(data) > 255 {
 		panic(fmt.Sprintf("String too long: %d bytes", len(data)))
 	}
+	// Create buffer for result
 	result := make([]byte, 1+len(data))
 	result[0] = byte(len(data))
 	copy(result[1:], data)
 	return result
 }
 
-// SerializeBet serialize a bet for sending
+// SerializeBet serializes a bet
 func SerializeBet(agencyID uint8, firstName, lastName, dni, birthDate string, number uint32) []byte {
-	buf := new(bytes.Buffer)
+	// Build message concatenating fields
+	msg := make([]byte, 0, 256)
 	
 	// Agency ID (1 byte)
-	buf.WriteByte(agencyID)
-
-	// Strings with length prefix
-	buf.Write(packString(firstName))
-	buf.Write(packString(lastName))
-	buf.Write(packString(dni))
-
-	// Fixed date 10 bytes (YYYY-MM-DD)
-	if len(birthDate) != 10 {
-		panic(fmt.Sprintf("Invalid date format: %s", birthDate))
-	}
-	buf.WriteString(birthDate)
-
-	// Number bet (4 bytes)
-	binary.Write(buf, binary.BigEndian, number)
+	msg = append(msg, agencyID)
 	
-	return buf.Bytes()
+	// Strings with length prefix
+	msg = append(msg, packString(firstName)...)
+	msg = append(msg, packString(lastName)...)
+	msg = append(msg, packString(dni)...)
+	
+	if len(birthDate) != 10 {
+		panic(fmt.Sprintf("Invalid date: %s", birthDate))
+	}
+	msg = append(msg, []byte(birthDate)...)
+	
+	// Bet number (4 bytes)
+	numBytes := make([]byte, 4)
+	binary.BigEndian.PutUint32(numBytes, number)
+	msg = append(msg, numBytes...)
+	
+	return msg
 }
 
-// SendAll sends all bytes, handles short writes
+// SendAll sends all bytes
 func SendAll(conn net.Conn, data []byte) error {
 	sent := 0
 	for sent < len(data) {
@@ -65,34 +65,45 @@ func SendAll(conn net.Conn, data []byte) error {
 	return nil
 }
 
-// RecvExact receives exactly 'size' bytes, handles short reads
+// RecvExact receives exactly size bytes
 func RecvExact(conn net.Conn, size int) ([]byte, error) {
-	buffer := make([]byte, size)
-	_, err := io.ReadFull(conn, buffer)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read %d bytes: %v", size, err)
+	buf := make([]byte, size)
+	received := 0
+	
+	for received < size {
+		n, err := conn.Read(buf[received:])
+		if err != nil {
+			return nil, err
+		}
+		if n == 0 {
+			return nil, fmt.Errorf("connection closed during receive")
+		}
+		received += n
 	}
-	return buffer, nil
+	
+	return buf, nil
 }
 
-// SendMessage sends a message with format: [size(2B)][data]
+// SendMessage sends a message with format [size(2B)][data]
 func SendMessage(conn net.Conn, message []byte) error {
 	if len(message) > MaxMessageSize {
 		return fmt.Errorf("message too large: %d bytes", len(message))
 	}
 	
-	// Frame: [size(2B)][payload]
+	// Size as 2 bytes
 	sizeBuf := make([]byte, 2)
 	binary.BigEndian.PutUint16(sizeBuf, uint16(len(message)))
-
-	// Send size + message
+	
+	// Send size
 	if err := SendAll(conn, sizeBuf); err != nil {
 		return err
 	}
+	
+	// Send message
 	return SendAll(conn, message)
 }
 
-// RecvMessage receives a message with format: [size(2B)][data]
+// RecvMessage receives a message with format [size(2B)][data]
 func RecvMessage(conn net.Conn) ([]byte, error) {
 	// Read size
 	sizeBuf, err := RecvExact(conn, 2)
@@ -104,32 +115,32 @@ func RecvMessage(conn net.Conn) ([]byte, error) {
 	if size > MaxMessageSize {
 		return nil, fmt.Errorf("message too large: %d bytes", size)
 	}
-
+	
 	// Read payload
 	return RecvExact(conn, int(size))
 }
 
-// SendSingleBet sends a bet and waits for confirmation
+// SendSingleBet sends a single bet and waits for confirmation
 func SendSingleBet(conn net.Conn, agencyID uint8, firstName, lastName, dni, birthDate string, number uint32) error {
-	// Serialize bet
-	message := SerializeBet(agencyID, firstName, lastName, dni, birthDate, number)
-
+	// Serialize
+	msg := SerializeBet(agencyID, firstName, lastName, dni, birthDate, number)
+	
 	// Send
-	if err := SendMessage(conn, message); err != nil {
+	if err := SendMessage(conn, msg); err != nil {
 		return fmt.Errorf("failed to send bet: %v", err)
 	}
-
-	// Wait for confirmation
+	
+	// Receive confirmation
 	response, err := RecvMessage(conn)
 	if err != nil {
 		return fmt.Errorf("failed to receive confirmation: %v", err)
 	}
 	
 	if len(response) != 4 {
-		return fmt.Errorf("invalid response size: %d", len(response))
+		return fmt.Errorf("invalid response size")
 	}
-
-	// Verify confirmed number
+	
+	// Verify number
 	confirmedNumber := binary.BigEndian.Uint32(response)
 	if confirmedNumber != number {
 		return fmt.Errorf("number mismatch: sent %d, confirmed %d", number, confirmedNumber)

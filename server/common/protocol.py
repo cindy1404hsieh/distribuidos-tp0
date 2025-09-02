@@ -1,58 +1,63 @@
-import struct
+# server/common/protocol.py
+"""
+Communication protocol for the lottery system
+"""
 import socket
-from typing import Tuple, Optional
 import logging
 
+# Constants
 ENCODING = 'utf-8'
-MAX_MESSAGE_SIZE = 8192  # 8KB 
+MAX_MESSAGE_SIZE = 8192  
 
-class ProtocolError(Exception):
-    """Errores específicos del protocolo"""
-    pass
+def int_to_bytes(n, length):
+    """Convert an integer to bytes"""
+    return n.to_bytes(length, byteorder='big')
 
-# serialize
-def pack_string(s: str) -> bytes:
-    """Packet string as [length(2B)][data]"""
+def bytes_to_int(b):
+    """Convert bytes to integer"""
+    return int.from_bytes(b, byteorder='big')
+
+def pack_string(s):
+    """Pack string as [length(1B)][data]"""
     encoded = s.encode(ENCODING)
-    if len(encoded) > 255:  # Usamos 1 byte para largo
-        raise ProtocolError(f"String too long: {len(encoded)} bytes")
-    return struct.pack('!B', len(encoded)) + encoded
+    if len(encoded) > 255:
+        raise Exception(f"String too long: {len(encoded)} bytes")
+    result = bytes([len(encoded)]) + encoded
+    return result
 
-def unpack_string(data: bytes, offset: int = 0) -> Tuple[str, int]:
-    """Unpack string, returns (string, bytes_consumed)"""
+def unpack_string(data, offset=0):
+    """Unpack string, return (string, bytes_consumed)"""
     length = data[offset]
     offset += 1
     string = data[offset:offset+length].decode(ENCODING)
     return string, length + 1
 
-def serialize_bet(agency_id: int, first_name: str, last_name: str, 
-                  dni: str, birth_date: str, number: int) -> bytes:
+def serialize_bet(agency_id, first_name, last_name, dni, birth_date, number):
     """
-    Serialize a single bet
-    Format: [agency(1B)][name][surname][dni_str][date(10B)][number(4B)]
+    Serialize a bet
+    Format: [agency(1B)][first_name][last_name][dni_str][birth_date(10B)][number(4B)]
     """
-    buf = bytearray()
+    msg = b''
     
     # Agency ID (1 byte)
-    buf.append(agency_id)
-
-    # Strings with length prefix
-    buf.extend(pack_string(first_name))
-    buf.extend(pack_string(last_name))
-    buf.extend(pack_string(dni))  # DNI as string to preserve leading zeros
-
-    # Fixed date 10 bytes (YYYY-MM-DD)
-    if len(birth_date) != 10:
-        raise ProtocolError(f"Invalid date format: {birth_date}")
-    buf.extend(birth_date.encode('ascii'))
-
-    # Bet number (4 bytes)
-    buf.extend(struct.pack('!I', number))
+    msg += bytes([agency_id])
     
-    return bytes(buf)
+    # Strings with length prefix
+    msg += pack_string(first_name)
+    msg += pack_string(last_name)
+    msg += pack_string(dni)  # DNI as string
+    
+    if len(birth_date) != 10:
+        raise Exception(f"Invalid date format: {birth_date}")
+    msg += birth_date.encode('ascii')
+    
+    # Bet number (4 bytes)
+    msg += int_to_bytes(number, 4)
+    
+    return msg
 
-def deserialize_bet(data: bytes) -> dict:
-    """Deserialize a single bet from bytes"""
+def deserialize_bet(data):
+    """Deserialize a bet from bytes"""
     offset = 0
     
     # Agency ID
@@ -68,13 +73,13 @@ def deserialize_bet(data: bytes) -> dict:
     
     dni, consumed = unpack_string(data, offset)
     offset += consumed
-
-    # Fixed date (10 bytes)
+    
+    # Date (fixed 10 bytes)
     birth_date = data[offset:offset+10].decode('ascii')
     offset += 10
-
-    # Bet number
-    number = struct.unpack('!I', data[offset:offset+4])[0]
+    
+    # Number (4 bytes)
+    number = bytes_to_int(data[offset:offset+4])
     
     return {
         'agency_id': agency_id,
@@ -85,94 +90,86 @@ def deserialize_bet(data: bytes) -> dict:
         'number': number
     }
 
-# tcp communication
-def send_all(sock: socket.socket, data: bytes) -> None:
-    """Send all bytes, handles short writes"""
+# TCP COMMUNICATION
+def send_all(sock, data):
+    """Send all bytes, handle short writes"""
     sent = 0
     while sent < len(data):
         n = sock.send(data[sent:])
         if n == 0:
-            raise ProtocolError("Connection closed during send")
+            raise Exception("Connection closed during send")
         sent += n
     logging.debug(f"Sent {len(data)} bytes")
 
-def recv_exact(sock: socket.socket, size: int) -> bytes:
-    """Receive exactly 'size' bytes, handles short reads"""
-    buffer = bytearray(size)
-    pos = 0
-    while pos < size:
-        n = sock.recv_into(memoryview(buffer)[pos:])
-        if n == 0:
-            raise ProtocolError("Connection closed during receive")
-        pos += n
+def recv_exact(sock, size):
+    """Receive exactly 'size' bytes, handle short reads"""
+    data = b''
+    while len(data) < size:
+        chunk = sock.recv(size - len(data))
+        if not chunk:  
+            raise Exception("Connection closed during receive")
+        data += chunk
     logging.debug(f"Received {size} bytes")
-    return bytes(buffer)
+    return data
 
-def send_message(sock: socket.socket, message: bytes) -> None:
+def send_message(sock, message):
     """
     Send message with format: [size(2B)][data]
     """
     if len(message) > MAX_MESSAGE_SIZE:
-        raise ProtocolError(f"Message too large: {len(message)} bytes")
+        raise Exception(f"Message too large: {len(message)} bytes")
     
-    # Frame: [size(2B)][payload]
-    frame = struct.pack('!H', len(message)) + message
+    # Size as 2 bytes
+    size_bytes = int_to_bytes(len(message), 2)
+    
+    # Send size + message
+    frame = size_bytes + message
     send_all(sock, frame)
 
-def recv_message(sock: socket.socket) -> bytes:
+def recv_message(sock):
     """
     Receive message with format: [size(2B)][data]
     """
-    # Read size
+    # Read size first
     size_bytes = recv_exact(sock, 2)
-    size = struct.unpack('!H', size_bytes)[0]
+    size = bytes_to_int(size_bytes)
     
     if size > MAX_MESSAGE_SIZE:
-        raise ProtocolError(f"Message too large: {size} bytes")
-
-    # Read payload
+        raise Exception(f"Message too large: {size} bytes")
+    
+    # Read the message
     return recv_exact(sock, size)
 
-# === HIGH LEVEL API ===
-def send_single_bet(sock: socket.socket, **bet_data) -> int:
+def send_single_bet(sock, agency_id, first_name, last_name, dni, birth_date, number):
     """
-    Send a single bet and wait for confirmation
-    Returns the number confirmed by the server
+    Send a bet and wait for confirmation
     """
-    # Serialize bet
-    message = serialize_bet(
-        bet_data['agency_id'],
-        bet_data['first_name'],
-        bet_data['last_name'],
-        bet_data['dni'],
-        bet_data['birth_date'],
-        bet_data['number']
-    )
-
+    # Serialize
+    msg = serialize_bet(agency_id, first_name, last_name, dni, birth_date, number)
+    
     # Send
-    send_message(sock, message)
-
-    # Wait for confirmation (server sends the number back)
+    send_message(sock, msg)
+    
+    # Wait for response (confirmed number)
     response = recv_message(sock)
     if len(response) != 4:
-        raise ProtocolError(f"Invalid response size: {len(response)}")
+        raise Exception(f"Invalid response: {len(response)} bytes")
     
-    confirmed_number = struct.unpack('!I', response)[0]
+    confirmed_number = bytes_to_int(response)
     return confirmed_number
 
-def receive_single_bet(sock: socket.socket) -> dict:
+def receive_single_bet(sock):
     """
-    Receive a bet and send confirmation
-    Used by the server
+    Receive a bet and send confirmation (used by server)
     """
     # Receive message
-    message = recv_message(sock)
-
+    msg = recv_message(sock)
+    
     # Deserialize
-    bet_data = deserialize_bet(message)
-
-    # Send confirmation (echo of the number)
-    confirmation = struct.pack('!I', bet_data['number'])
+    bet_data = deserialize_bet(msg)
+    
+    # Send confirmation (echo back the number)
+    confirmation = int_to_bytes(bet_data['number'], 4)
     send_message(sock, confirmation)
     
     return bet_data
