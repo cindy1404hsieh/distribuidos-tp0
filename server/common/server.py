@@ -2,12 +2,14 @@ import socket
 import logging
 import signal
 import sys
-
+from .protocol import receive_single_bet, ProtocolError
+from .utils import Bet, store_bets
 
 class Server:
     def __init__(self, port, listen_backlog):
         # Initialize server socket
         self._server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self._server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         self._server_socket.bind(('', port))
         self._server_socket.listen(listen_backlog)
         
@@ -18,9 +20,7 @@ class Server:
         signal.signal(signal.SIGTERM, self._handle_sigterm)
 
     def _handle_sigterm(self, sig, frame):
-        """
-        Handle SIGTERM signal for graceful shutdown
-        """
+        """Handle SIGTERM signal for graceful shutdown"""
         logging.info('action: sigterm_received | result: in_progress')
         self._running = False
         # Close the server socket to unblock accept()
@@ -33,11 +33,7 @@ class Server:
 
     def run(self):
         """
-        Server loop with graceful shutdown support
-
-        Server that accept a new connections and establishes a
-        communication with a client. After client with communucation
-        finishes, servers starts to accept new connections again
+        Server loop - Accepts connections from agencies and processes bets
         """
         try:
             while self._running:
@@ -46,7 +42,7 @@ class Server:
                     if client_sock:
                         self.__handle_client_connection(client_sock)
                 except OSError:
-                    # This happens when socket is closed during accept()
+                    # Socket closed during accept()
                     if not self._running:
                         break
                     raise
@@ -54,9 +50,7 @@ class Server:
             self.__cleanup()
 
     def __cleanup(self):
-        """
-        Clean up resources before shutting down
-        """
+        """Clean up resources before shutting down"""
         if hasattr(self, '_server_socket'):
             try:
                 self._server_socket.close()
@@ -67,35 +61,42 @@ class Server:
 
     def __handle_client_connection(self, client_sock):
         """
-        Read message from a specific client socket and closes the socket
-
-        If a problem arises in the communication with the client, the
-        client socket will also be closed
+        Receives a bet from an agency and stores it
         """
         try:
-            # TODO: Modify the receive to avoid short-reads
-            msg = client_sock.recv(1024).rstrip().decode('utf-8')
-            addr = client_sock.getpeername()
-            logging.info(f'action: receive_message | result: success | ip: {addr[0]} | msg: {msg}')
-            # TODO: Modify the send to avoid short-writes
-            client_sock.send("{}\n".format(msg).encode('utf-8'))
-        except OSError as e:
-            logging.error(f"action: receive_message | result: fail | error: {e}")
+            # Receive bet using the protocol
+            bet_data = receive_single_bet(client_sock)
+
+            # Convert to Bet object for store_bets
+            bet = Bet(
+                agency=str(bet_data['agency_id']),
+                first_name=bet_data['first_name'],
+                last_name=bet_data['last_name'],
+                document=bet_data['dni'],
+                birthdate=bet_data['birth_date'],
+                number=str(bet_data['number'])
+            )
+
+            # Store using the provided function
+            store_bets([bet])
+
+            # Log required by the statement
+            logging.info(f"action: apuesta_almacenada | result: success | "
+                        f"dni: {bet_data['dni']} | numero: {bet_data['number']}")
+            
+        except ProtocolError as e:
+            logging.error(f"action: receive_bet | result: fail | error: {e}")
+        except Exception as e:
+            logging.error(f"action: store_bet | result: fail | error: {e}")
         finally:
             client_sock.close()
             logging.debug('action: client_socket_closed | result: success')
 
     def __accept_new_connection(self):
-        """
-        Accept new connections
-
-        Function blocks until a connection to a client is made.
-        Then connection created is printed and returned
-        """
-        # Connection arrived
+        """Accept new connections from agencies"""
         logging.info('action: accept_connections | result: in_progress')
-        
-        # Set timeout to periodically check if we should shutdown
+
+        # Set timeout to periodically check shutdown
         self._server_socket.settimeout(1.0)
         
         while self._running:
@@ -106,7 +107,6 @@ class Server:
             except socket.timeout:
                 continue
             except OSError:
-                # Socket was closed, exit gracefully
                 if not self._running:
                     return None
                 raise

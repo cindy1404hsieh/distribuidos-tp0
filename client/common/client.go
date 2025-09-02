@@ -1,11 +1,10 @@
 package common
 
 import (
-	"bufio"
-	"fmt"
 	"net"
 	"os"
 	"os/signal"
+	"strconv"
 	"syscall"
 	"time"
 
@@ -22,19 +21,49 @@ type ClientConfig struct {
 	LoopPeriod    time.Duration
 }
 
-// Client Entity that encapsulates how
+// BetData contains the bet data from env vars
+type BetData struct {
+	FirstName string
+	LastName  string
+	DNI       string
+	BirthDate string
+	Number    uint32
+}
+
+// Client Entity that encapsulates lottery agency logic
 type Client struct {
 	config   ClientConfig
-	conn     net.Conn
+	betData  BetData
 	shutdown chan os.Signal
 	running  bool
 }
 
-// NewClient Initializes a new client receiving the configuration
-// as a parameter
+// NewClient Initializes a new client with bet data from environment
 func NewClient(config ClientConfig) *Client {
+	// Read bet data from environment variables
+	betData := BetData{
+		FirstName: os.Getenv("CLI_NOMBRE"),
+		LastName:  os.Getenv("CLI_APELLIDO"),
+		DNI:       os.Getenv("CLI_DOCUMENTO"),
+		BirthDate: os.Getenv("CLI_NACIMIENTO"),
+	}
+	
+	// Parse bet number
+	if numStr := os.Getenv("CLI_NUMERO"); numStr != "" {
+		if num, err := strconv.ParseUint(numStr, 10, 32); err == nil {
+			betData.Number = uint32(num)
+		}
+	}
+	
+	// Validate that we have all the data
+	if betData.FirstName == "" || betData.LastName == "" || 
+	   betData.DNI == "" || betData.BirthDate == "" || betData.Number == 0 {
+		log.Warning("Missing bet data in environment variables")
+	}
+	
 	client := &Client{
 		config:   config,
+		betData:  betData,
 		shutdown: make(chan os.Signal, 1),
 		running:  true,
 	}
@@ -45,112 +74,51 @@ func NewClient(config ClientConfig) *Client {
 	return client
 }
 
-// CreateClientSocket Initializes client socket. In case of
-// failure, error is printed in stdout/stderr and exit 1
-// is returned
-func (c *Client) createClientSocket() error {
-	conn, err := net.Dial("tcp", c.config.ServerAddress)
-	if err != nil {
-		log.Criticalf(
-			"action: connect | result: fail | client_id: %v | error: %v",
-			c.config.ID,
-			err,
-		)
-		return err
-	}
-	c.conn = conn
-	return nil
-}
-
-// closeConnection closes the current connection if it exists
-func (c *Client) closeConnection() {
-	if c.conn != nil {
-		c.conn.Close()
-		c.conn = nil
-		log.Debugf("action: connection_closed | result: success | client_id: %v", c.config.ID)
-	}
-}
-
-// StartClientLoop Send messages to the client until some time threshold is met
+// StartClientLoop sends the bet to the central lottery server
 func (c *Client) StartClientLoop() {
 	// Handle graceful shutdown in a goroutine
 	go func() {
 		<-c.shutdown
 		log.Infof("action: sigterm_received | result: in_progress | client_id: %v", c.config.ID)
 		c.running = false
-		// Close any active connection
-		c.closeConnection()
 	}()
-
-	// There is an autoincremental msgID to identify every message sent
-	// Messages if the message amount threshold has not been surpassed
-	for msgID := 1; msgID <= c.config.LoopAmount && c.running; msgID++ {
-		// Check if we should shutdown before creating connection
-		if !c.running {
-			break
-		}
-
-		// Create the connection the server in every loop iteration
-		err := c.createClientSocket()
-		if err != nil {
-			if !c.running {
-				// Error due to shutdown
-				break
-			}
-			return
-		}
-
-		// TODO: Modify the send to avoid short-write
-		_, err = fmt.Fprintf(
-			c.conn,
-			"[CLIENT %v] Message N°%v\n",
-			c.config.ID,
-			msgID,
-		)
-		
-		if err != nil {
-			log.Errorf("action: send_message | result: fail | client_id: %v | error: %v",
-				c.config.ID,
-				err,
-			)
-			c.closeConnection()
-			if !c.running {
-				break
-			}
-			return
-		}
-
-		msg, err := bufio.NewReader(c.conn).ReadString('\n')
-		c.closeConnection()
-
-		if err != nil {
-			if !c.running {
-				// Error due to shutdown, exit gracefully
-				break
-			}
-			log.Errorf("action: receive_message | result: fail | client_id: %v | error: %v",
-				c.config.ID,
-				err,
-			)
-			return
-		}
-
-		log.Infof("action: receive_message | result: success | client_id: %v | msg: %v",
-			c.config.ID,
-			msg,
-		)
-
-		// Wait a time between sending one message and the next one
-		select {
-		case <-time.After(c.config.LoopPeriod):
-			// Normal wait
-		case <-c.shutdown:
-			// Shutdown signal received during wait
-			c.running = false
-			log.Infof("action: shutdown_during_wait | result: success | client_id: %v", c.config.ID)
-			break
-		}
+	
+	// we send a single bet
+	if !c.running {
+		return
 	}
+	
+	// Connect to the server
+	conn, err := net.Dial("tcp", c.config.ServerAddress)
+	if err != nil {
+		log.Errorf("action: connect | result: fail | client_id: %v | error: %v",
+			c.config.ID, err)
+		return
+	}
+	defer conn.Close()
+
+	// Parse agency ID from client ID
+	agencyID, _ := strconv.ParseUint(c.config.ID, 10, 8)
+
+	// Send bet using the protocol
+	err = SendSingleBet(
+		conn,
+		uint8(agencyID),
+		c.betData.FirstName,
+		c.betData.LastName,
+		c.betData.DNI,
+		c.betData.BirthDate,
+		c.betData.Number,
+	)
+	
+	if err != nil {
+		log.Errorf("action: send_bet | result: fail | client_id: %v | error: %v",
+			c.config.ID, err)
+		return
+	}
+
+	log.Infof("action: apuesta_enviada | result: success | dni: %v | numero: %v",
+		c.betData.DNI, c.betData.Number)
 	
 	// Clean shutdown
 	if !c.running {
