@@ -93,22 +93,16 @@ class Server:
             logging.debug('action: client_socket_closed | result: success')
 
     def __accept_new_connection(self):
-        """Accept new connections from agencies"""
-        logging.info('action: accept_connections | result: in_progress')
+        """
+        Accept new connections
 
-        # Set timeout to periodically check shutdown
-        self._server_socket.settimeout(1.0)
-        
-        while self._running:
-            try:
-                c, addr = self._server_socket.accept()
-                logging.info(f'action: accept_connections | result: success | ip: {addr[0]}')
-                return c
-            except socket.timeout:
-                continue
-            except OSError:
-                if not self._running:
-                    return None
-                raise
-        
-        return None
+        Function blocks until a connection to a client is made.
+        Then connection created is printed and returned
+        """
+        logging.info('action: accept_connections | result: in_progress')
+        try:
+            c, addr = self._server_socket.accept()  
+            logging.info(f'action: accept_connections | result: success | ip: {addr[0]}')
+            return c
+        except OSError:
+            return None
