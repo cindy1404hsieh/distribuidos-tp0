@@ -7,7 +7,8 @@ import (
 	"strconv"
 	"syscall"
 	"time"
-
+	"encoding/csv"
+	
 	"github.com/op/go-logging"
 )
 
@@ -76,54 +77,133 @@ func NewClient(config ClientConfig) *Client {
 
 // StartClientLoop sends the bet to the central lottery server
 func (c *Client) StartClientLoop() {
-	// Handle graceful shutdown in a goroutine
-	go func() {
-		<-c.shutdown
-		log.Infof("action: sigterm_received | result: in_progress | client_id: %v", c.config.ID)
-		c.running = false
-	}()
-	
-	// we send a single bet
-	if !c.running {
-		return
-	}
-	
-	// Connect to the server
-	conn, err := net.Dial("tcp", c.config.ServerAddress)
-	if err != nil {
-		log.Errorf("action: connect | result: fail | client_id: %v | error: %v",
-			c.config.ID, err)
-		return
-	}
-	defer conn.Close()
+    // Handle graceful shutdown in a goroutine
+    go func() {
+        <-c.shutdown
+        log.Infof("action: sigterm_received | result: in_progress | client_id: %v", c.config.ID)
+        c.running = false
+    }()
+    
+    // read bets from CSV
+    bets, err := c.readBets()
+    if err != nil {
+        log.Errorf("action: read_csv | result: fail | client_id: %v | error: %v", c.config.ID, err)
+        return
+    }
+    
+    log.Infof("Read %d bets from file", len(bets))
+    
+    // get max batch size from config
+    maxBatchSize := c.config.BatchMaxAmount  
+    if maxBatchSize == 0 {
+        maxBatchSize = 50 
+    }
+    
+    // process in batches
+    for i := 0; i < len(bets) && c.running; i += maxBatchSize {
+        end := i + maxBatchSize
+        if end > len(bets) {
+            end = len(bets)
+        }
+        
+        batch := bets[i:end]
+        
+        // connect for each batch
+        conn, err := net.Dial("tcp", c.config.ServerAddress)
+        if err != nil {
+            log.Errorf("action: connect | result: fail | client_id: %v | error: %v", c.config.ID, err)
+            continue
+        }
+        
+        // send the batch
+        err = c.sendBatch(conn, batch)
+        conn.Close()
+        
+        if err != nil {
+            log.Errorf("action: send_batch | result: fail | client_id: %v | error: %v", c.config.ID, err)
+        } else {
+            log.Infof("action: batch_sent | result: success | size: %d", len(batch))
+        }
+    }
+    
+    // Clean shutdown
+    if !c.running {
+        log.Infof("action: graceful_shutdown | result: success | client_id: %v", c.config.ID)
+    } else {
+        log.Infof("action: loop_finished | result: success | client_id: %v", c.config.ID)
+    }
+}
 
-	// Parse agency ID from client ID
-	agencyID, _ := strconv.ParseUint(c.config.ID, 10, 8)
 
-	// Send bet using the protocol
-	err = SendSingleBet(
-		conn,
-		uint8(agencyID),
-		c.betData.FirstName,
-		c.betData.LastName,
-		c.betData.DNI,
-		c.betData.BirthDate,
-		c.betData.Number,
-	)
-	
-	if err != nil {
-		log.Errorf("action: send_bet | result: fail | client_id: %v | error: %v",
-			c.config.ID, err)
-		return
-	}
+func (c *Client) readBets() ([]BetData, error) {
+    // open the csv file
+    filename := fmt.Sprintf("/data/agency-%s.csv", c.config.ID)
+    file, err := os.Open(filename)
+    if err != nil {
+        return nil, err
+    }
+    defer file.Close()
+    
+    reader := csv.NewReader(file)
+    
+    // read the header
+    header, err := reader.Read()
+    if err != nil {
+        return nil, err
+    }
+    log.Debugf("CSV header: %v", header)
+    
+    var bets []BetData
+    
+    // read each line
+    for {
+        record, err := reader.Read()
+        if err != nil {
+            break // EOF or error
+        }
+        
+        // parse the number
+        num, _ := strconv.ParseUint(record[4], 10, 32)
+        
+        bet := BetData{
+            FirstName: record[0],
+            LastName:  record[1],
+            DNI:       record[2],
+            BirthDate: record[3],
+            Number:    uint32(num),
+        }
+        bets = append(bets, bet)
+    }
+    
+    log.Infof("Read %d bets from file", len(bets))
+    return bets, nil
+}
 
-	log.Infof("action: apuesta_enviada | result: success | dni: %v | numero: %v",
-		c.betData.DNI, c.betData.Number)
-	
-	// Clean shutdown
-	if !c.running {
-		log.Infof("action: graceful_shutdown | result: success | client_id: %v", c.config.ID)
-	} else {
-		log.Infof("action: loop_finished | result: success | client_id: %v", c.config.ID)
-	}
+func (c *Client) sendBatch(conn net.Conn, batch []BetData) error {
+    agencyID, _ := strconv.ParseUint(c.config.ID, 10, 8)
+    
+    // serialize the batch
+    msg, err := SerializeBatch(uint8(agencyID), batch)
+    if err != nil {
+        return err
+    }
+    
+    // send
+    if err := SendMessage(conn, msg); err != nil {
+        return err
+    }
+    
+    // wait for response
+    response, err := RecvMessage(conn)
+    if err != nil {
+        return err
+    }
+    
+    // check response (1 byte: 0=ok, 1=error)
+    if response[0] != 0 {
+        return fmt.Errorf("server returned error")
+    }
+    
+    log.Infof("action: batch_sent | result: success | size: %d", len(batch))
+    return nil
 }

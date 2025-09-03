@@ -60,6 +60,7 @@ def generate_docker_compose(output_file, client_count):
         yaml_content.append("      - server")
         yaml_content.append("    volumes:")
         yaml_content.append("      - ./client/config.yaml:/config.yaml")
+        yaml_content.append(f"      - ./.data/agency-{i}.csv:/data/agency-{i}.csv")
         if i < client_count:  # Add empty line between clients except for the last one
             yaml_content.append("")
     

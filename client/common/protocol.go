@@ -8,6 +8,8 @@ import (
 
 const (
 	MaxMessageSize = 8192
+	MessageTypeSingle = 0x01
+	MessageTypeBatch  = 0x02
 )
 
 // packString packs a string as [length(1B)][data]
@@ -48,7 +50,32 @@ func SerializeBet(agencyID uint8, firstName, lastName, dni, birthDate string, nu
 	
 	return msg
 }
+func SerializeBatch(agencyID uint8, bets []BetData) ([]byte, error) {
+    msg := make([]byte, 0, MaxMessageSize)
 
+    // msg type (1 byte)
+    msg = append(msg, MessageTypeBatch)
+
+    // number of bets (2 bytes)
+    numBets := uint16(len(bets))
+    numBytes := make([]byte, 2)
+    binary.BigEndian.PutUint16(numBytes, numBets)
+    msg = append(msg, numBytes...)
+
+    // serialize each bet
+    for _, bet := range bets {
+        betBytes := SerializeBet(agencyID, bet.FirstName, bet.LastName,
+            bet.DNI, bet.BirthDate, bet.Number)
+
+        // check that it doesnt exceed 8KB
+        if len(msg) + len(betBytes) > MaxMessageSize {
+            return nil, fmt.Errorf("batch too large")
+        }
+        msg = append(msg, betBytes...)
+    }
+    
+    return msg, nil
+}
 // SendAll sends all bytes
 func SendAll(conn net.Conn, data []byte) error {
 	sent := 0
