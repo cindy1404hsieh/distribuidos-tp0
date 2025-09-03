@@ -148,16 +148,8 @@ func (c *Client) readBets() ([]BetData, error) {
     
     reader := csv.NewReader(file)
     
-    // read the header
-    header, err := reader.Read()
-    if err != nil {
-        return nil, err
-    }
-    log.Debugf("CSV header: %v", header)
-    
     var bets []BetData
     
-    // read each line
     for {
         record, err := reader.Read()
         if err != nil {
