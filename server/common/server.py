@@ -60,7 +60,6 @@ class Server:
         logging.info('action: graceful_shutdown | result: success')
 
     def __handle_client_connection(self, client_sock):
-        """Receive and process a batch of bets"""
         try:
             # receive the batch
             bets_data = receive_batch(client_sock)
@@ -81,17 +80,17 @@ class Server:
             # store all bets in the batch
             store_bets(bets)
             
-            # send OK response (1 byte: 0 = success)
-            response = bytes([0])
+            from .protocol import int_to_bytes
+            last_number = bets_data[-1]['number']
+            response = int_to_bytes(last_number, 4) 
             send_message(client_sock, response)
             
             logging.info(f"action: apuesta_recibida | result: success | cantidad: {len(bets)}")
             
         except Exception as e:
             logging.error(f"action: apuesta_recibida | result: fail | error: {e}")
-            # send ERROR response
             try:
-                response = bytes([1])
+                response = int_to_bytes(0, 4)  
                 send_message(client_sock, response)
             except:
                 pass

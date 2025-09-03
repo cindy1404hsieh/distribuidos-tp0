@@ -1,6 +1,7 @@
 package common
 
 import (
+    "fmt" 
 	"net"
 	"os"
 	"os/signal"
@@ -8,7 +9,7 @@ import (
 	"syscall"
 	"time"
 	"encoding/csv"
-	
+	"encoding/binary"
 	"github.com/op/go-logging"
 )
 
@@ -200,9 +201,15 @@ func (c *Client) sendBatch(conn net.Conn, batch []BetData) error {
         return err
     }
     
-    // check response (1 byte: 0=ok, 1=error)
-    if response[0] != 0 {
-        return fmt.Errorf("server returned error")
+    if len(response) != 4 {
+        return fmt.Errorf("invalid response size: expected 4 bytes, got %d", len(response))
+    }
+    
+    confirmedNumber := binary.BigEndian.Uint32(response)
+    expectedNumber := batch[len(batch)-1].Number
+    
+    if confirmedNumber != expectedNumber {
+        return fmt.Errorf("number mismatch: expected %d, got %d", expectedNumber, confirmedNumber)
     }
     
     log.Infof("action: batch_sent | result: success | size: %d", len(batch))
