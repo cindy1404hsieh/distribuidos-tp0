@@ -8,6 +8,8 @@ import logging
 # Constants
 ENCODING = 'utf-8'
 MAX_MESSAGE_SIZE = 8192  
+MESSAGE_TYPE_SINGLE = 0x01
+MESSAGE_TYPE_BATCH = 0x02
 
 def int_to_bytes(n, length):
     """Convert an integer to bytes"""
@@ -173,3 +175,72 @@ def receive_single_bet(sock):
     send_message(sock, confirmation)
     
     return bet_data
+
+def deserialize_batch(data):
+    """Deserialize a batch of bets"""
+    offset = 0
+    
+    # message type (1 byte)
+    msg_type = data[offset]
+    offset += 1
+    
+    if msg_type != MESSAGE_TYPE_BATCH:
+        raise Exception(f"Invalid message type: {msg_type}")
+    
+    # number of bets (2 bytes)
+    num_bets = bytes_to_int(data[offset:offset+2])
+    offset += 2
+    
+    bets = []
+    # deserialize each bet
+    for i in range(num_bets):
+        # calculate the size of this bet
+        bet_start = offset
+        
+        # read fields to determine their size
+        agency_id = data[offset]
+        offset += 1
+        
+        # variable-length strings
+        first_name, consumed = unpack_string(data, offset)
+        offset += consumed
+        
+        last_name, consumed = unpack_string(data, offset)
+        offset += consumed
+        
+        dni, consumed = unpack_string(data, offset)
+        offset += consumed
+        
+        # birth date (10 fixed bytes)
+        birth_date = data[offset:offset+10].decode('ascii')
+        offset += 10
+        
+        # number (4 bytes)
+        number = bytes_to_int(data[offset:offset+4])
+        offset += 4
+        
+        bet = {
+            'agency_id': agency_id,
+            'first_name': first_name,
+            'last_name': last_name,
+            'dni': dni,
+            'birth_date': birth_date,
+            'number': number
+        }
+        bets.append(bet)
+    
+    return bets
+
+def receive_batch(sock):
+    """Receive a batch and respond"""
+    # receive the message
+    msg = recv_message(sock)
+    
+    # check message type
+    if msg[0] == MESSAGE_TYPE_SINGLE:
+        bet_data = deserialize_bet(msg)
+        return [bet_data]
+    elif msg[0] == MESSAGE_TYPE_BATCH:
+        return deserialize_batch(msg)
+    else:
+        raise Exception(f"Unknown message type: {msg[0]}")

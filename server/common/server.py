@@ -2,7 +2,7 @@ import socket
 import logging
 import signal
 import sys
-from .protocol import receive_single_bet
+from .protocol import receive_batch, send_message
 from .utils import Bet, store_bets
 
 class Server:
@@ -60,37 +60,44 @@ class Server:
         logging.info('action: graceful_shutdown | result: success')
 
     def __handle_client_connection(self, client_sock):
-        """
-        Receives a bet from an agency and stores it
-        """
+        """Receive and process a batch of bets"""
         try:
-            # Receive bet using the protocol
-            bet_data = receive_single_bet(client_sock)
-
-            # Convert to Bet object for store_bets
-            bet = Bet(
-                agency=str(bet_data['agency_id']),
-                first_name=bet_data['first_name'],
-                last_name=bet_data['last_name'],
-                document=bet_data['dni'],
-                birthdate=bet_data['birth_date'],
-                number=str(bet_data['number'])
-            )
-
-            # Store using the provided function
-            store_bets([bet])
-
-            # Log required by the statement
-            logging.info(f"action: apuesta_almacenada | result: success | "
-                        f"dni: {bet_data['dni']} | numero: {bet_data['number']}")
+            # receive the batch
+            bets_data = receive_batch(client_sock)
+            
+            # convert to Bet objects
+            bets = []
+            for bet_data in bets_data:
+                bet = Bet(
+                    agency=str(bet_data['agency_id']),
+                    first_name=bet_data['first_name'],
+                    last_name=bet_data['last_name'],
+                    document=bet_data['dni'],
+                    birthdate=bet_data['birth_date'],
+                    number=str(bet_data['number'])
+                )
+                bets.append(bet)
+            
+            # store all bets in the batch
+            store_bets(bets)
+            
+            # send OK response (1 byte: 0 = success)
+            response = bytes([0])
+            send_message(client_sock, response)
+            
+            logging.info(f"action: bet_received | result: success | amount: {len(bets)}")
             
         except Exception as e:
-            logging.error(f"action: receive_bet | result: fail | error: {e}")
-        except Exception as e:
-            logging.error(f"action: store_bet | result: fail | error: {e}")
+            logging.error(f"action: bet_received | result: fail | error: {e}")
+            # send ERROR response
+            try:
+                response = bytes([1])
+                send_message(client_sock, response)
+            except:
+                pass
         finally:
             client_sock.close()
-            logging.debug('action: client_socket_closed | result: success')
+
 
     def __accept_new_connection(self):
         """
