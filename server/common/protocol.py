@@ -118,15 +118,13 @@ def send_message(sock, message):
     """
     Send message with format: [size(2B)][data]
     """
-    if len(message) > MAX_MESSAGE_SIZE:
-        raise Exception(f"Message too large: {len(message)} bytes")
-    
     # Size as 2 bytes
     size_bytes = int_to_bytes(len(message), 2)
-    
     # Send size + message
     frame = size_bytes + message
     send_all(sock, frame)
+    logging.debug(f"Sent {len(frame)} bytes") 
+
 
 def recv_message(sock):
     """

@@ -85,10 +85,10 @@ class Server:
             response = bytes([0])
             send_message(client_sock, response)
             
-            logging.info(f"action: bet_received | result: success | amount: {len(bets)}")
+            logging.info(f"action: action: apuesta_recibida | result: success | cantidad: {len(bets)}")
             
         except Exception as e:
-            logging.error(f"action: bet_received | result: fail | error: {e}")
+            logging.error(f"action: action: apuesta_recibida | result: fail | error: {e}")
             # send ERROR response
             try:
                 response = bytes([1])
