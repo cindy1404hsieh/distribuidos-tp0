@@ -67,6 +67,7 @@ class Server:
                     if not self._running:
                         break
                     raise
+                
         finally:
             self.__cleanup()
 
