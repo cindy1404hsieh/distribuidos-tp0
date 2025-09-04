@@ -187,6 +187,7 @@ func (c *Client) getWinners() []string {
             continue
         }
         
+        
         // pido ganadores: [type][agency_id]
         msg := []byte{MESSAGE_TYPE_GET_WINNERS, uint8(agencyID)}
         err = SendMessage(conn, msg)
