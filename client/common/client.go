@@ -188,7 +188,13 @@ func (c *Client) getWinners() []string {
         
         // pido ganadores: [type][agency_id]
         msg := []byte{MESSAGE_TYPE_GET_WINNERS, uint8(agencyID)}
-        SendMessage(conn, msg)
+        err = SendMessage(conn, msg)
+        if err != nil {
+            conn.Close()
+            log.Errorf("Failed to send GET_WINNERS: %v", err)
+            time.Sleep(100 * time.Millisecond)
+            continue
+        }
         
         // recibo respuesta
         response, err := RecvMessage(conn)
@@ -201,7 +207,7 @@ func (c *Client) getWinners() []string {
         }
         
         // veo que me respondieron
-        if response[0] == MESSAGE_TYPE_NOT_READY {
+        if len(response) > 0 && response[0] == MESSAGE_TYPE_NOT_READY {
             // sorteo no listo, espero un poco
             log.Debugf("Lottery not ready yet, retrying")
             time.Sleep(100 * time.Millisecond)
