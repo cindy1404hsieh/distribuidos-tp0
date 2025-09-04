@@ -16,14 +16,14 @@ def generate_docker_compose(output_file, client_count):
     yaml_content.append("services:")
     
     # Server configuration with volume
-    #yaml_content.append("  server:")
+    yaml_content.append("  server:")
     yaml_content.append("    container_name: server")
     yaml_content.append("    image: server:latest")
     yaml_content.append("    entrypoint: python3 /main.py")
     yaml_content.append("    environment:")
     yaml_content.append("      - PYTHONUNBUFFERED=1")
     #yaml_content.append(f"      - EXPECTED_AGENCIES={client_count}")
-    #yaml_content.append("    networks:")
+    yaml_content.append("    networks:")
     yaml_content.append("      - testing_net")
     yaml_content.append("    volumes:")
     yaml_content.append("      - ./server/config.ini:/config.ini")
