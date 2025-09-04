@@ -1,3 +1,4 @@
+import os
 import socket
 import logging
 import signal
@@ -23,7 +24,7 @@ class Server:
         self._running = True
         
         # Para el ejercicio 7
-        self.expected_agencies = 5
+        self.expected_agencies = int(os.environ.get("EXPECTED_AGENCIES", 5))
         self.agencies_done = set()  # agencias que terminaron
         self.lottery_done = False   # ya hice el sorteo?
         self.winners = {}           # ganadores por agencia
@@ -149,7 +150,7 @@ class Server:
             send_message(client_sock, response)
             
             # Hacer sorteo cuando TODAS las agencias conocidas enviaron DONE evitar sorteo prematuro
-            if not self.lottery_done and len(self.known_agencies) >= 3:
+            if not self.lottery_done and len(self.known_agencies) >= self.expected_agencies:
                 if len(self.agencies_done) == len(self.known_agencies):
                     logging.debug(f"All {len(self.known_agencies)} agencies finished. Starting lottery.")
                     self.__do_lottery()
