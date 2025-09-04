@@ -64,5 +64,3 @@ make docker-compose-logs
 Decisiones de diseño
 
 Reconexión para cada operación: Preferí reconectar para cada mensaje en lugar de mantener conexiones persistentes, ya que simplifica el manejo sin threads.
-
-Espera de 5 agencias fija: Por simplicidad, el servidor espera exactamente 5 agencias como dice el enunciado. Podría hacerlo dinámico con una variable de entorno.
