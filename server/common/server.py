@@ -27,7 +27,7 @@ class Server:
         self.agencies_done = set()  # agencias que terminaron
         self.lottery_done = False   # ya hice el sorteo?
         self.winners = {}           # ganadores por agencia
-        
+        self.known_agencies = set()
         # Register signal handler for SIGTERM
         signal.signal(signal.SIGTERM, self._handle_sigterm)
 
@@ -104,6 +104,11 @@ class Server:
             # deserializo el batch
             bets_data = deserialize_batch(msg)
             
+            if bets_data:
+                agency_id = bets_data[0]['agency_id']
+                self.known_agencies.add(agency_id)
+                logging.debug(f"known agencies so far: {self.known_agencies}")
+
             # convierto a objetos Bet
             bets = []
             for bet_data in bets_data:
@@ -138,17 +143,18 @@ class Server:
         try:
             # saco el agency_id del mensaje
             agency_id = msg[1]
-            
+            self.known_agencies.add(agency_id)
             # marco que termino
             self.agencies_done.add(agency_id)
-            logging.debug(f"Agency {agency_id} finished. Total done: {len(self.agencies_done)}")
+            logging.debug(f"Agency {agency_id} finished. Total done: {len(self.agencies_done)}/{len(self.known_agencies)}")
             
             # respondo OK
             response = bytes([0x01])
             send_message(client_sock, response)
             
-            # veo si ya terminaron las 5
-            if len(self.agencies_done) == self.expected_agencies and not self.lottery_done:
+            # veo si ya terminaron todas las conocidas
+            if self.known_agencies and len(self.agencies_done) == len(self.known_agencies) and not self.lottery_done:
+                logging.debug(f"All {len(self.known_agencies)} agencies finished. Starting lottery.")
                 self.__do_lottery()
                 
         except Exception as e:
