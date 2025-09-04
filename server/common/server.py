@@ -140,22 +140,18 @@ class Server:
 
     def __handle_done(self, client_sock, msg):
         try:
-            # saco el agency_id del mensaje
             agency_id = msg[1]
-            
-            self.known_agencies.add(agency_id)
-            # marco que termino
             self.agencies_done.add(agency_id)
+            # solo considerar conocidas las agencias que enviaron batches
             logging.debug(f"Agency {agency_id} finished. Total done: {len(self.agencies_done)}/{len(self.known_agencies)}")
             
-            # respondo OK
             response = bytes([0x01])
             send_message(client_sock, response)
             
-            # nueva logica para decidir cuándo hacer el sorteo
-            if len(self.agencies_done) >= 3 and not self.lottery_done:
-                if len(self.agencies_done) == 5 or len(self.agencies_done) == len(self.known_agencies):
-                    logging.debug(f"All {len(self.agencies_done)} agencies finished. Starting lottery.")
+            # Hacer sorteo cuando TODAS las agencias conocidas enviaron DONE evitar sorteo prematuro
+            if not self.lottery_done and len(self.known_agencies) >= 3:
+                if len(self.agencies_done) == len(self.known_agencies):
+                    logging.debug(f"All {len(self.known_agencies)} agencies finished. Starting lottery.")
                     self.__do_lottery()
                     
         except Exception as e:
