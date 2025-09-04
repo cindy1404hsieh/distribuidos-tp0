@@ -139,10 +139,10 @@ class Server:
             send_message(client_sock, response)
 
     def __handle_done(self, client_sock, msg):
-        """Maneja cuando una agencia termina"""
         try:
             # saco el agency_id del mensaje
             agency_id = msg[1]
+            
             self.known_agencies.add(agency_id)
             # marco que termino
             self.agencies_done.add(agency_id)
@@ -152,11 +152,12 @@ class Server:
             response = bytes([0x01])
             send_message(client_sock, response)
             
-            # veo si ya terminaron todas las conocidas
-            if self.known_agencies and len(self.agencies_done) == len(self.known_agencies) and not self.lottery_done:
-                logging.debug(f"All {len(self.known_agencies)} agencies finished. Starting lottery.")
-                self.__do_lottery()
-                
+            # nueva logica para decidir cuándo hacer el sorteo
+            if len(self.agencies_done) >= 3 and not self.lottery_done:
+                if len(self.agencies_done) == 5 or len(self.agencies_done) == len(self.known_agencies):
+                    logging.debug(f"All {len(self.agencies_done)} agencies finished. Starting lottery.")
+                    self.__do_lottery()
+                    
         except Exception as e:
             logging.error(f"Error handling DONE: {e}")
 
