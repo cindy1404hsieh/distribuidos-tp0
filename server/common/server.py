@@ -23,6 +23,7 @@ class Server:
         self._running = True
         
         # Para el ejercicio 7
+        self.expected_agencies = 5
         self.agencies_done = set()  # agencias que terminaron
         self.lottery_done = False   # ya hice el sorteo?
         self.winners = {}           # ganadores por agencia
@@ -147,7 +148,7 @@ class Server:
             send_message(client_sock, response)
             
             # veo si ya terminaron las 5
-            if len(self.agencies_done) == 5 and not self.lottery_done:
+            if len(self.agencies_done) == self.expected_agencies and not self.lottery_done:
                 self.__do_lottery()
                 
         except Exception as e:
