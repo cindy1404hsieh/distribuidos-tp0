@@ -8,8 +8,12 @@ import (
 
 const (
 	MaxMessageSize = 8192
-	MessageTypeSingle = 0x01
-	MessageTypeBatch  = 0x02
+	MESSAGE_TYPE_SINGLE = 0x01
+	MESSAGE_TYPE_BATCH  = 0x02
+	MESSAGE_TYPE_DONE = 0x03         // agencia termino
+	MESSAGE_TYPE_GET_WINNERS = 0x04  // pedir ganadores
+	MESSAGE_TYPE_WINNERS = 0x05      // respuesta con ganadores
+	MESSAGE_TYPE_NOT_READY = 0x06    // sorteo no listo
 )
 
 // packString packs a string as [length(1B)][data]
@@ -50,11 +54,12 @@ func SerializeBet(agencyID uint8, firstName, lastName, dni, birthDate string, nu
 	
 	return msg
 }
+
 func SerializeBatch(agencyID uint8, bets []BetData) ([]byte, error) {
     msg := make([]byte, 0, MaxMessageSize)
 
     // msg type (1 byte)
-    msg = append(msg, MessageTypeBatch)
+    msg = append(msg, MESSAGE_TYPE_BATCH)
 
     // number of bets (2 bytes)
     numBets := uint16(len(bets))
@@ -76,6 +81,7 @@ func SerializeBatch(agencyID uint8, bets []BetData) ([]byte, error) {
     
     return msg, nil
 }
+
 // SendAll sends all bytes
 func SendAll(conn net.Conn, data []byte) error {
 	sent := 0
@@ -145,33 +151,4 @@ func RecvMessage(conn net.Conn) ([]byte, error) {
 	
 	// Read payload
 	return RecvExact(conn, int(size))
-}
-
-// SendSingleBet sends a single bet and waits for confirmation
-func SendSingleBet(conn net.Conn, agencyID uint8, firstName, lastName, dni, birthDate string, number uint32) error {
-	// Serialize
-	msg := SerializeBet(agencyID, firstName, lastName, dni, birthDate, number)
-	
-	// Send
-	if err := SendMessage(conn, msg); err != nil {
-		return fmt.Errorf("failed to send bet: %v", err)
-	}
-	
-	// Receive confirmation
-	response, err := RecvMessage(conn)
-	if err != nil {
-		return fmt.Errorf("failed to receive confirmation: %v", err)
-	}
-	
-	if len(response) != 4 {
-		return fmt.Errorf("invalid response size")
-	}
-	
-	// Verify number
-	confirmedNumber := binary.BigEndian.Uint32(response)
-	if confirmedNumber != number {
-		return fmt.Errorf("number mismatch: sent %d, confirmed %d", number, confirmedNumber)
-	}
-	
-	return nil
 }

@@ -124,18 +124,124 @@ func (c *Client) StartClientLoop() {
         if err != nil {
             log.Errorf("action: send_batch | result: fail | client_id: %v | error: %v", c.config.ID, err)
         } else {
-            log.Infof("action: batch_sent | result: success | size: %d", len(batch))
+            log.Debugf("action: batch_sent | result: success | size: %d", len(batch))
         }
     }
     
-    // Clean shutdown
+    // si me interrumpieron, termino
     if !c.running {
         log.Infof("action: graceful_shutdown | result: success | client_id: %v", c.config.ID)
+        return
+    }
+    
+    err = c.sendDone()
+    if err != nil {
+        log.Errorf("action: send_done | result: fail | client_id: %v | error: %v", c.config.ID, err)
     } else {
-        log.Infof("action: loop_finished | result: success | client_id: %v", c.config.ID)
+        log.Debugf("Agency %s sent DONE message", c.config.ID)
+    }
+    
+    winners := c.getWinners()
+    log.Infof("action: consulta_ganadores | result: success | cant_ganadores: %d", len(winners))
+    
+    // Clean shutdown
+    log.Infof("action: loop_finished | result: success | client_id: %v", c.config.ID)
+}
+
+func (c *Client) sendDone() error {
+    conn, err := net.Dial("tcp", c.config.ServerAddress)
+    if err != nil {
+        return err
+    }
+    defer conn.Close()
+    
+    agencyID, _ := strconv.ParseUint(c.config.ID, 10, 8)
+    
+    // mensaje DONE : [type][agency_id]
+    msg := []byte{MESSAGE_TYPE_DONE, uint8(agencyID)}
+    
+    if err := SendMessage(conn, msg); err != nil {
+        return err
+    }
+    
+    // espero ACK
+    _, err = RecvMessage(conn)
+    return err
+}
+
+func (c *Client) getWinners() []string {
+    agencyID, _ := strconv.ParseUint(c.config.ID, 10, 8)
+    
+    // reintento hasta que este el sorteo
+    for {
+        // check si me pidieron terminar
+        if !c.running {
+            return []string{}
+        }
+        
+        conn, err := net.Dial("tcp", c.config.ServerAddress)
+        if err != nil {
+            log.Errorf("Failed to connect: %v", err)
+            time.Sleep(100 * time.Millisecond)
+            continue
+        }
+        
+        // pido ganadores: [type][agency_id]
+        msg := []byte{MESSAGE_TYPE_GET_WINNERS, uint8(agencyID)}
+        SendMessage(conn, msg)
+        
+        // recibo respuesta
+        response, err := RecvMessage(conn)
+        conn.Close()
+        
+        if err != nil {
+            log.Errorf("Failed to receive winners: %v", err)
+            time.Sleep(100 * time.Millisecond)
+            continue
+        }
+        
+        // veo que me respondieron
+        if response[0] == MESSAGE_TYPE_NOT_READY {
+            // sorteo no listo, espero un poco
+            log.Debugf("Lottery not ready yet, retrying")
+            time.Sleep(100 * time.Millisecond)
+            continue
+        }
+        
+        // parseo los ganadores
+        return parseWinners(response)
     }
 }
 
+func parseWinners(data []byte) []string {
+    offset := 0
+    
+    // tipo de mensaje
+    msgType := data[offset]
+    offset++
+    
+    if msgType != MESSAGE_TYPE_WINNERS {
+        log.Errorf("Invalid message type: %d", msgType)
+        return []string{}
+    }
+    
+    // cantidad de ganadores
+    count := binary.BigEndian.Uint16(data[offset:offset+2])
+    offset += 2
+    
+    winners := make([]string, 0, count)
+    
+    // parseo cada DNI
+    for i := uint16(0); i < count; i++ {
+        length := data[offset]
+        offset++
+        dni := string(data[offset:offset+int(length)])
+        offset += int(length)
+        winners = append(winners, dni)
+    }
+    
+    return winners
+}
 
 func (c *Client) readBets() ([]BetData, error) {
     // open the csv file
@@ -169,7 +275,6 @@ func (c *Client) readBets() ([]BetData, error) {
         bets = append(bets, bet)
     }
     
-    log.Infof("Read %d bets from file", len(bets))
     return bets, nil
 }
 
@@ -204,6 +309,5 @@ func (c *Client) sendBatch(conn net.Conn, batch []BetData) error {
         return fmt.Errorf("number mismatch: expected %d, got %d", expectedNumber, confirmedNumber)
     }
     
-    log.Infof("action: batch_sent | result: success | size: %d", len(batch))
     return nil
 }
