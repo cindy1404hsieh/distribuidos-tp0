@@ -10,6 +10,9 @@ ENCODING = 'utf-8'
 MAX_MESSAGE_SIZE = 8192  
 MESSAGE_TYPE_SINGLE = 0x01
 MESSAGE_TYPE_BATCH = 0x02
+MESSAGE_TYPE_DONE = 0x03        
+MESSAGE_TYPE_GET_WINNERS = 0x04  
+MESSAGE_TYPE_WINNERS = 0x05      
 
 def int_to_bytes(n, length):
     """Convert an integer to bytes"""
@@ -123,7 +126,6 @@ def send_message(sock, message):
     # Send size + message
     frame = size_bytes + message
     send_all(sock, frame)
-    logging.debug(f"Sent {len(frame)} bytes") 
 
 
 def recv_message(sock):
@@ -139,40 +141,6 @@ def recv_message(sock):
     
     # Read the message
     return recv_exact(sock, size)
-
-def send_single_bet(sock, agency_id, first_name, last_name, dni, birth_date, number):
-    """
-    Send a bet and wait for confirmation
-    """
-    # Serialize
-    msg = serialize_bet(agency_id, first_name, last_name, dni, birth_date, number)
-    
-    # Send
-    send_message(sock, msg)
-    
-    # Wait for response (confirmed number)
-    response = recv_message(sock)
-    if len(response) != 4:
-        raise Exception(f"Invalid response: {len(response)} bytes")
-    
-    confirmed_number = bytes_to_int(response)
-    return confirmed_number
-
-def receive_single_bet(sock):
-    """
-    Receive a bet and send confirmation (used by server)
-    """
-    # Receive message
-    msg = recv_message(sock)
-    
-    # Deserialize
-    bet_data = deserialize_bet(msg)
-    
-    # Send confirmation (echo back the number)
-    confirmation = int_to_bytes(bet_data['number'], 4)
-    send_message(sock, confirmation)
-    
-    return bet_data
 
 def deserialize_batch(data):
     """Deserialize a batch of bets"""
@@ -192,9 +160,6 @@ def deserialize_batch(data):
     bets = []
     # deserialize each bet
     for i in range(num_bets):
-        # calculate the size of this bet
-        bet_start = offset
-        
         # read fields to determine their size
         agency_id = data[offset]
         offset += 1
@@ -242,3 +207,36 @@ def receive_batch(sock):
         return deserialize_batch(msg)
     else:
         raise Exception(f"Unknown message type: {msg[0]}")
+
+def serialize_winners(winners):
+    """Serializa lista de DNIs ganadores"""
+    msg = bytes([MESSAGE_TYPE_WINNERS])
+    msg += int_to_bytes(len(winners), 2)
+    
+    for dni in winners:
+        msg += pack_string(dni)
+    
+    return msg
+
+def deserialize_winners(data):
+    """Deserializa lista de DNIs ganadores"""
+    offset = 0
+    
+    # tipo de mensaje
+    msg_type = data[offset]
+    offset += 1
+    
+    if msg_type != MESSAGE_TYPE_WINNERS:
+        raise Exception(f"Invalid message type: {msg_type}")
+    
+    # cantidad de ganadores
+    count = bytes_to_int(data[offset:offset+2])
+    offset += 2
+    
+    winners = []
+    for i in range(count):
+        dni, consumed = unpack_string(data, offset)
+        offset += consumed
+        winners.append(dni)
+    
+    return winners
