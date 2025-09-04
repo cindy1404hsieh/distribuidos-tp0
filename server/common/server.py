@@ -78,11 +78,12 @@ class Server:
             
             # veo que tipo de mensaje es
             msg_type = msg[0]
-            
+            logging.debug(f"Message type received: {msg_type:#x} from msg length {len(msg)}")
             if msg_type == MESSAGE_TYPE_BATCH:
                 # es un batch de apuestas
                 self.__handle_batch(client_sock, msg)
             elif msg_type == MESSAGE_TYPE_DONE:
+                logging.debug("DONE message received")
                 # agencia termino de mandar
                 self.__handle_done(client_sock, msg)
             elif msg_type == MESSAGE_TYPE_GET_WINNERS:
