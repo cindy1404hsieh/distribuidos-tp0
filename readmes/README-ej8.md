@@ -4,11 +4,9 @@ extendí el servidor para que pueda procesar múltiples agencias de forma concur
 
 ## Patrón de concurrencia
 
-El servidor utiliza un ThreadPoolExecutor para manejar cada conexión entrante en un thread separado.
+El servidor utiliza **multithreading manual** para manejar cada conexión entrante en un thread separado usando `threading.Thread()`.
 
 Cada batch de apuestas se procesa de forma independiente y los accesos a recursos compartidos como almacenamiento de apuestas o estado del sorteo están protegidos con locks (threading.Lock y threading.Condition).
-
-
 
 ## Justificación 
 
@@ -24,7 +22,7 @@ Locks y Condition aseguran consistencia de datos y sincronización del sorteo si
 
 Cada cliente se conecta y envía mensajes según nuestro protocolo (batch de apuestas, DONE, GET_WINNERS).
 
-Cada conexión se maneja en un thread del pool:
+Cada conexión se maneja en un **thread independiente creado manualmente**:
 
 MESSAGE_TYPE_BATCH: deserializa apuestas, las almacena con lock, responde con ACK.
 
@@ -34,7 +32,7 @@ MESSAGE_TYPE_GET_WINNERS: espera al sorteo si aún no se realizó, luego respond
 
 Sorteo: se ejecuta solo cuando todas las agencias han enviado DONE, actualizando self.winners y notificando a threads esperando.
 
-Cierro todas las conexiones y el ThreadPoolExecutor al finalizar (__cleanup).
+**Mantengo una lista manual de threads activos** y cierro todas las conexiones esperando que terminen con join() al finalizar (__cleanup).
 
 ## consistencia
 
