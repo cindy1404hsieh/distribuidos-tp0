@@ -40,8 +40,6 @@ Conozco la alternativa de mantener los sockets abiertos y que el servidor respon
 
 Es más simple de implementar sin concurrencia
 Evita mantener múltiples conexiones abiertas en el servidor secuencial
-El sleep de 100ms evita saturar al servidor (no es busy waiting)
-
 
 Sincronización del sorteo
 El servidor mantiene un contador de agencias que terminaron. Cuando todas las agencias esperadas envían DONE, se ejecuta el sorteo. Esto garantiza que todas las apuestas se consideren.
