@@ -147,6 +147,7 @@ func (c *Client) StartClientLoop() {
     
     // Clean shutdown
     log.Infof("action: loop_finished | result: success | client_id: %v", c.config.ID)
+    time.Sleep(2 * time.Second)
 }
 
 func (c *Client) sendDone() error {
