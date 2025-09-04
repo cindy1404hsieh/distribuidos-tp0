@@ -61,24 +61,24 @@ class Server:
                 pass
         self.executor.shutdown(wait=False)
 
-    def run(self):
-        """ Server loop - Accepts connections from agencies and processes bets
-        Now handles multiple connections concurrently
-        """
-        try:
-            while self._running:
-                try:
-                    client_sock = self.__accept_new_connection()
-                    if client_sock:
-                        # submit connection to thread pool
-                        future = self.executor.submit(self.__handle_client_connection_thread, client_sock)
-                        self.active_connections.append(future)
-                except OSError:
-                    if not self._running:
-                        break
-                    raise
-        finally:
-            self.__cleanup()
+    # def run(self):
+    #     """ Server loop - Accepts connections from agencies and processes bets
+    #     Now handles multiple connections concurrently
+    #     """
+    #     try:
+    #         while self._running:
+    #             try:
+    #                 client_sock = self.__accept_new_connection()
+    #                 if client_sock:
+    #                     # submit connection to thread pool
+    #                     future = self.executor.submit(self.__handle_client_connection_thread, client_sock)
+    #                     self.active_connections.append(future)
+    #             except OSError:
+    #                 if not self._running:
+    #                     break
+    #                 raise
+    #     finally:
+    #         self.__cleanup()
 
     def __cleanup(self):
         """Clean up resources before shutting down"""
