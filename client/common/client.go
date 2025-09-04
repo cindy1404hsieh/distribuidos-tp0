@@ -101,42 +101,43 @@ func (c *Client) StartClientLoop() {
         maxBatchSize = 50 
     }
     
-    // process in batches
-    for i := 0; i < len(bets) && c.running; i += maxBatchSize {
-        end := i + maxBatchSize
-        if end > len(bets) {
-            end = len(bets)
-        }
-        
-        batch := bets[i:end]
-        
-        // connect for each batch
-        conn, err := net.Dial("tcp", c.config.ServerAddress)
-        if err != nil {
-            log.Errorf("action: connect | result: fail | client_id: %v | error: %v", c.config.ID, err)
-            continue
-        }
-        
-        // send the batch
-        err = c.sendBatch(conn, batch)
-        conn.Close()
-        
-        if err != nil {
-            log.Errorf("action: send_batch | result: fail | client_id: %v | error: %v", c.config.ID, err)
-        } else {
-            log.Debugf("action: batch_sent | result: success | size: %d", len(batch))
+    // process bet in batches 
+    if len(bets) > 0 {
+        for i := 0; i < len(bets) && c.running; i += maxBatchSize {
+            end := i + maxBatchSize
+            if end > len(bets) {
+                end = len(bets)
+            }
+            
+            batch := bets[i:end]
+            
+            conn, err := net.Dial("tcp", c.config.ServerAddress)
+            if err != nil {
+                log.Errorf("action: connect | result: fail | client_id: %v | error: %v", c.config.ID, err)
+                continue
+            }
+            
+            err = c.sendBatch(conn, batch)
+            conn.Close()
+            
+            if err != nil {
+                log.Errorf("action: send_batch | result: fail | client_id: %v | error: %v", c.config.ID, err)
+            } else {
+                log.Debugf("action: batch_sent | result: success | size: %d", len(batch))
+            }
         }
     }
-    
+
     // si me interrumpieron, termino
     if !c.running {
         log.Infof("action: graceful_shutdown | result: success | client_id: %v", c.config.ID)
         return
     }
-    
+
     err = c.sendDone()
     if err != nil {
         log.Errorf("action: send_done | result: fail | client_id: %v | error: %v", c.config.ID, err)
+        return
     } else {
         log.Debugf("Agency %s sent DONE message", c.config.ID)
     }
