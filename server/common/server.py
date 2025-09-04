@@ -1,3 +1,4 @@
+import os
 import socket
 import logging
 import signal
@@ -28,9 +29,9 @@ class Server:
 
         # Flag for graceful shutdown
         self._running = True
-
+        
         # Para el ejercicio 7
-        self.expected_agencies = 5
+        self.expected_agencies = int(os.environ.get("EXPECTED_AGENCIES", 5))
         self.agencies_done = set()  # agencias que terminaron
         self.lottery_done = False  # ya hice el sorteo?
         self.winners = {}  # ganadores por agencia
@@ -182,7 +183,7 @@ class Server:
                 self.agencies_done.add(agency_id)
                 logging.debug(f"Agency {agency_id} finished. Total done: {len(self.agencies_done)}/{len(self.known_agencies)}")
                 # si debemos hacer el sorteo
-                if not self.lottery_done and len(self.known_agencies) >= 3:
+                if not self.lottery_done and len(self.known_agencies) >= self.expected_agencies:
                     if len(self.agencies_done) == len(self.known_agencies):
                         should_do_lottery = True
                         logging.debug(f"All {len(self.known_agencies)} agencies finished. Will start lottery.")
