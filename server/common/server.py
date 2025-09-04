@@ -40,7 +40,7 @@ class Server:
         self.active_connections = []
 
         # Tiempo de espera para recibir nuevas agencias (timeout)
-        self.registration_timeout = 5  # segundos
+        self.registration_timeout = 10  # segundos
 
         # Register signal handler for SIGTERM
         signal.signal(signal.SIGTERM, self._handle_sigterm)
