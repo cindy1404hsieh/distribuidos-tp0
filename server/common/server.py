@@ -2,6 +2,8 @@ import socket
 import logging
 import signal
 import sys
+import threading
+from concurrent.futures import ThreadPoolExecutor
 from .protocol import (
     recv_message, send_message, deserialize_batch, 
     serialize_winners, int_to_bytes,
@@ -28,6 +30,15 @@ class Server:
         self.lottery_done = False   # ya hice el sorteo?
         self.winners = {}           # ganadores por agencia
         self.known_agencies = set()
+        
+        self.storage_lock = threading.Lock()  # Para proteger store_bets/load_bets
+        self.state_lock = threading.Lock()    # Para proteger estado compartido
+        self.lottery_condition = threading.Condition(self.state_lock)  # Para notificar sorteo
+        
+        # Thread pool para manejar conexiones concurrentemente
+        self.executor = ThreadPoolExecutor(max_workers=10)
+        self.active_connections = []
+        
         # Register signal handler for SIGTERM
         signal.signal(signal.SIGTERM, self._handle_sigterm)
 
@@ -42,19 +53,22 @@ class Server:
                 logging.info('action: close_server_socket | result: success')
             except:
                 pass
+        self.executor.shutdown(wait=False)
 
     def run(self):
         """
         Server loop - Accepts connections from agencies and processes bets
+        Now handles multiple connections concurrently
         """
         try:
             while self._running:
                 try:
                     client_sock = self.__accept_new_connection()
                     if client_sock:
-                        self.__handle_client_connection(client_sock)
+                        # submit connection to thread pool
+                        future = self.executor.submit(self.__handle_client_connection_thread, client_sock)
+                        self.active_connections.append(future)
                 except OSError:
-                    # Socket closed during accept()
                     if not self._running:
                         break
                     raise
@@ -63,6 +77,18 @@ class Server:
 
     def __cleanup(self):
         """Clean up resources before shutting down"""
+        # wait for active connections with timeout
+        if self.active_connections:
+            logging.info('action: waiting_active_connections | result: in_progress')
+            for future in self.active_connections:
+                try:
+                    future.result(timeout=2)
+                except:
+                    pass
+        
+        # shutdown executor
+        self.executor.shutdown(wait=True, cancel_futures=True)
+        
         if hasattr(self, '_server_socket'):
             try:
                 self._server_socket.close()
@@ -71,8 +97,22 @@ class Server:
                 pass
         logging.info('action: graceful_shutdown | result: success')
 
+    def __handle_client_connection_thread(self, client_sock):
+        """
+        Thread wrapper para manejar conexión con logging de errores
+        """
+        try:
+            self.__handle_client_connection(client_sock)
+        except Exception as e:
+            logging.error(f"Error in client thread: {e}")
+        finally:
+            try:
+                client_sock.close()
+            except:
+                pass
+
     def __handle_client_connection(self, client_sock):
-        """Maneja una conexion del cliente"""
+        """Maneja una conexion del cliente (ahora thread-safe)"""
         try:
             # recibo el mensaje
             msg = recv_message(client_sock)
@@ -95,19 +135,19 @@ class Server:
                 
         except Exception as e:
             logging.error(f"Error handling client: {e}")
-        finally:
-            client_sock.close()
 
     def __handle_batch(self, client_sock, msg):
-        """Procesa un batch como antes"""
+        """Procesa un batch (ahora thread-safe)"""
         try:
             # deserializo el batch
             bets_data = deserialize_batch(msg)
             
             if bets_data:
                 agency_id = bets_data[0]['agency_id']
-                self.known_agencies.add(agency_id)
-                logging.debug(f"known agencies so far: {self.known_agencies}")
+                # proteger acceso a known_agencies
+                with self.state_lock:
+                    self.known_agencies.add(agency_id)
+                    logging.debug(f"known agencies so far: {self.known_agencies}")
 
             # convierto a objetos Bet
             bets = []
@@ -122,8 +162,9 @@ class Server:
                 )
                 bets.append(bet)
             
-            # guardo las apuestas
-            store_bets(bets)
+            # proteger store_bets con lock
+            with self.storage_lock:
+                store_bets(bets)
             
             # respondo con el ultimo numero
             last_number = bets_data[-1]['number']
@@ -134,47 +175,65 @@ class Server:
             
         except Exception as e:
             logging.error(f"action: apuesta_recibida | result: fail | error: {e}")
-            # mando error
-            response = int_to_bytes(0, 4)
-            send_message(client_sock, response)
+            try:
+                response = int_to_bytes(0, 4)
+                send_message(client_sock, response)
+            except:
+                pass
 
     def __handle_done(self, client_sock, msg):
+        """Maneja DONE message (thread-safe)"""
         try:
             agency_id = msg[1]
-            self.agencies_done.add(agency_id)
-            # solo considerar conocidas las agencias que enviaron batches
-            logging.debug(f"Agency {agency_id} finished. Total done: {len(self.agencies_done)}/{len(self.known_agencies)}")
             
+            # proteger acceso al estado compartido
+            should_do_lottery = False
+            with self.state_lock:
+                self.agencies_done.add(agency_id)
+                logging.debug(f"Agency {agency_id} finished. Total done: {len(self.agencies_done)}/{len(self.known_agencies)}")
+
+                # si debemos hacer el sorteo
+                if not self.lottery_done and len(self.known_agencies) >= 3:
+                    if len(self.agencies_done) == len(self.known_agencies):
+                        should_do_lottery = True
+                        logging.debug(f"All {len(self.known_agencies)} agencies finished. Will start lottery.")
+            
+            # Enviar ACK
             response = bytes([0x01])
             send_message(client_sock, response)
             
-            # Hacer sorteo cuando TODAS las agencias conocidas enviaron DONE evitar sorteo prematuro
-            if not self.lottery_done and len(self.known_agencies) >= 3:
-                if len(self.agencies_done) == len(self.known_agencies):
-                    logging.debug(f"All {len(self.known_agencies)} agencies finished. Starting lottery.")
-                    self.__do_lottery()
+            # hacer sorteo fuera del lock si es necesario
+            if should_do_lottery:
+                self.__do_lottery()
                     
         except Exception as e:
             logging.error(f"Error handling DONE: {e}")
 
     def __do_lottery(self):
-        """Hace el sorteo cuando terminaron las 5 agencias"""
+        """Hace el sorteo cuando terminaron todas las agencias"""
         logging.info("action: sorteo | result: success")
         
-        # cargo todas las apuestas
-        all_bets = list(load_bets())
+        # crgar apuestas
+        with self.storage_lock:
+            all_bets = list(load_bets())
+        
         logging.debug(f"Loaded {len(all_bets)} bets for lottery")
         
         # busco los ganadores
-        self.winners = {}
+        winners_temp = {}
         for bet in all_bets:
             if has_won(bet):
                 # si es ganador, lo agrego a su agencia
-                if bet.agency not in self.winners:
-                    self.winners[bet.agency] = []
-                self.winners[bet.agency].append(bet.document)
+                if bet.agency not in winners_temp:
+                    winners_temp[bet.agency] = []
+                winners_temp[bet.agency].append(bet.document)
         
-        self.lottery_done = True
+        # actualizar estado y notificar threads esperando
+        with self.lottery_condition:
+            self.winners = winners_temp
+            self.lottery_done = True
+            # notificar a todos los threads esperando el sorteo
+            self.lottery_condition.notify_all()
         
         # debug: cuantos ganadores por agencia
         for agency, winners in self.winners.items():
@@ -186,17 +245,30 @@ class Server:
             # saco el agency_id
             agency_id = msg[1]
             
-            if not self.lottery_done:
-                # sorteo no listo todavia - mando solo el tipo de mensaje
-                response = bytes([MESSAGE_TYPE_NOT_READY])
-                send_message(client_sock, response)
-                logging.debug(f"Agency {agency_id} asked for winners but lottery not ready")
-                return
+            # esperar a que el sorteo este listo
+            with self.lottery_condition:
+                # si el sorteo no está listo, esperamos
+                while not self.lottery_done and self._running:
+                    logging.debug(f"Agency {agency_id} waiting for lottery...")
+                    # esperar con timeout para poder chequear _running
+                    if not self.lottery_condition.wait(timeout=0.5):
+                        # timeout, verificar si seguimos corriendo
+                        if not self._running:
+                            # shutting down
+                            response = bytes([MESSAGE_TYPE_NOT_READY])
+                            send_message(client_sock, response)
+                            return
+                
+                # el sorteo está listo o el server está cerrando
+                if not self.lottery_done:
+                    response = bytes([MESSAGE_TYPE_NOT_READY])
+                    send_message(client_sock, response)
+                    return
+                
+                # busco ganadores de esta agencia (dentro del lock)
+                agency_winners = self.winners.get(agency_id, [])
             
-            # busco ganadores de esta agencia
-            agency_winners = self.winners.get(agency_id, [])
-            
-            # armo la respuesta
+            # armo la respuesta (fuera del lock)
             response = serialize_winners(agency_winners)
             send_message(client_sock, response)
             
@@ -214,7 +286,6 @@ class Server:
     def __accept_new_connection(self):
         """
         Accept new connections
-
         Function blocks until a connection to a client is made.
         Then connection created is printed and returned
         """
@@ -224,4 +295,6 @@ class Server:
             logging.info(f'action: accept_connections | result: success | ip: {addr[0]}')
             return c
         except OSError:
+            if not self._running:
+                logging.debug("Accept interrupted by shutdown")
             return None
