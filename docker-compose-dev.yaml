@@ -6,9 +6,11 @@ services:
     entrypoint: python3 /main.py
     environment:
       - PYTHONUNBUFFERED=1
-      - LOGGING_LEVEL=DEBUG
+      - EXPECTED_AGENCIES=5
     networks:
       - testing_net
+    volumes:
+      - ./server/config.ini:/config.ini
 
   client1:
     container_name: client1
@@ -16,11 +18,18 @@ services:
     entrypoint: /client
     environment:
       - CLI_ID=1
-      - CLI_LOG_LEVEL=DEBUG
+      - CLI_NOMBRE=Juan_1
+      - CLI_APELLIDO=Perez_1
+      - CLI_DOCUMENTO=30904466
+      - CLI_NACIMIENTO=1999-04-16
+      - CLI_NUMERO=7575
     networks:
       - testing_net
     depends_on:
       - server
+    volumes:
+      - ./client/config.yaml:/config.yaml
+      - ./.data/agency-1.csv:/data/agency-1.csv
 
   client2:
     container_name: client2
@@ -28,11 +37,18 @@ services:
     entrypoint: /client
     environment:
       - CLI_ID=2
-      - CLI_LOG_LEVEL=DEBUG
+      - CLI_NOMBRE=Juan_2
+      - CLI_APELLIDO=Perez_2
+      - CLI_DOCUMENTO=30904467
+      - CLI_NACIMIENTO=1999-05-16
+      - CLI_NUMERO=7576
     networks:
       - testing_net
     depends_on:
       - server
+    volumes:
+      - ./client/config.yaml:/config.yaml
+      - ./.data/agency-2.csv:/data/agency-2.csv
 
   client3:
     container_name: client3
@@ -40,11 +56,18 @@ services:
     entrypoint: /client
     environment:
       - CLI_ID=3
-      - CLI_LOG_LEVEL=DEBUG
+      - CLI_NOMBRE=Juan_3
+      - CLI_APELLIDO=Perez_3
+      - CLI_DOCUMENTO=30904468
+      - CLI_NACIMIENTO=1999-06-15
+      - CLI_NUMERO=7574
     networks:
       - testing_net
     depends_on:
       - server
+    volumes:
+      - ./client/config.yaml:/config.yaml
+      - ./.data/agency-3.csv:/data/agency-3.csv
 
   client4:
     container_name: client4
@@ -52,11 +75,18 @@ services:
     entrypoint: /client
     environment:
       - CLI_ID=4
-      - CLI_LOG_LEVEL=DEBUG
+      - CLI_NOMBRE=Juan_4
+      - CLI_APELLIDO=Perez_4
+      - CLI_DOCUMENTO=30904469
+      - CLI_NACIMIENTO=1999-07-15
+      - CLI_NUMERO=7578
     networks:
       - testing_net
     depends_on:
       - server
+    volumes:
+      - ./client/config.yaml:/config.yaml
+      - ./.data/agency-4.csv:/data/agency-4.csv
 
   client5:
     container_name: client5
@@ -64,11 +94,18 @@ services:
     entrypoint: /client
     environment:
       - CLI_ID=5
-      - CLI_LOG_LEVEL=DEBUG
+      - CLI_NOMBRE=Juan_5
+      - CLI_APELLIDO=Perez_5
+      - CLI_DOCUMENTO=30904470
+      - CLI_NACIMIENTO=1999-08-14
+      - CLI_NUMERO=7579
     networks:
       - testing_net
     depends_on:
       - server
+    volumes:
+      - ./client/config.yaml:/config.yaml
+      - ./.data/agency-5.csv:/data/agency-5.csv
 
 networks:
   testing_net:
