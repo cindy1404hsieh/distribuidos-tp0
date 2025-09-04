@@ -4,7 +4,6 @@ import logging
 import signal
 import sys
 import threading
-from concurrent.futures import ThreadPoolExecutor
 from .protocol import (
     recv_message,
     send_message,
@@ -37,14 +36,15 @@ class Server:
         self.winners = {}  # ganadores por agencia
         self.known_agencies = set()
 
+        # Locks para sincronización thread-safe
         self.storage_lock = threading.Lock()  # Para proteger store_bets/load_bets
         self.state_lock = threading.Lock()    # Para proteger estado compartido
         self.lottery_condition = threading.Condition(self.state_lock)  # Para notificar sorteo
 
-        # Thread pool para manejar conexiones concurrentemente
-        self.executor = ThreadPoolExecutor(max_workers=10)
-        self.active_connections = []
-
+        # Lista manual de threads activos
+        self.active_threads = []
+        self.threads_lock = threading.Lock()  # Para proteger la lista de threads
+        
         # Register signal handler for SIGTERM
         signal.signal(signal.SIGTERM, self._handle_sigterm)
 
@@ -52,6 +52,7 @@ class Server:
         """Handle SIGTERM signal for graceful shutdown"""
         logging.info('action: sigterm_received | result: in_progress')
         self._running = False
+        
         # Close the server socket to unblock accept()
         if self._server_socket:
             try:
@@ -59,20 +60,31 @@ class Server:
                 logging.info('action: close_server_socket | result: success')
             except:
                 pass
-        self.executor.shutdown(wait=False)
 
     def run(self):
         """ Server loop - Accepts connections from agencies and processes bets
-        Now handles multiple connections concurrently
+        Now handles multiple connections concurrently with manual thread management
         """
         try:
             while self._running:
                 try:
                     client_sock = self.__accept_new_connection()
                     if client_sock:
-                        # submit connection to thread pool
-                        future = self.executor.submit(self.__handle_client_connection_thread, client_sock)
-                        self.active_connections.append(future)
+                        # Crear y lanzar un thread manualmente para cada conexión
+                        thread = threading.Thread(
+                            target=self.__handle_client_thread,
+                            args=(client_sock,),
+                            daemon=False  
+                        )
+                        
+                        # Registrar el thread en nuestra lista
+                        with self.threads_lock:
+                            # Limpiar threads muertos antes de agregar el nuevo
+                            self.active_threads = [t for t in self.active_threads if t.is_alive()]
+                            self.active_threads.append(thread)
+                            logging.debug(f"Active threads count: {len(self.active_threads)}")
+                        thread.start()
+                        
                 except OSError:
                     if not self._running:
                         break
@@ -82,70 +94,104 @@ class Server:
 
     def __cleanup(self):
         """Clean up resources before shutting down"""
-        # wait for active connections with timeout
-        if self.active_connections:
-            logging.info('action: waiting_active_connections | result: in_progress')
-            for future in self.active_connections:
+        logging.info('action: cleanup_start | result: in_progress')
+        
+        # Esperar a que terminen todos los threads activos con timeout
+        with self.threads_lock:
+            threads_to_wait = self.active_threads.copy()
+        
+        if threads_to_wait:
+            logging.info(f'action: waiting_active_threads | count: {len(threads_to_wait)}')
+            for thread in threads_to_wait:
                 try:
-                    future.result(timeout=2)
-                except:
-                    pass
-        # shutdown executor
-        self.executor.shutdown(wait=True, cancel_futures=True)
+                    # Join con timeout para no bloquear indefinidamente
+                    thread.join(timeout=2.0)
+                    if thread.is_alive():
+                        logging.warning(f'Thread {thread.name} did not finish in time')
+                except Exception as e:
+                    logging.error(f"Error joining thread: {e}")
+        
+        # Cerrar el socket del servidor si aún está abierto
         if hasattr(self, '_server_socket'):
             try:
                 self._server_socket.close()
                 logging.info('action: server_socket_closed | result: success')
             except:
                 pass
+        
         logging.info('action: graceful_shutdown | result: success')
 
-    def __handle_client_connection_thread(self, client_sock):
-        """ Thread wrapper para manejar conexión con logging de errores """
+    def __handle_client_thread(self, client_sock):
+        """Thread function para manejar una conexión de cliente"""
+        thread_id = threading.current_thread().name
+        logging.debug(f"Thread {thread_id} started for client connection")
+        
         try:
             self.__handle_client_connection(client_sock)
         except Exception as e:
-            logging.error(f"Error in client thread: {e}")
+            logging.error(f"Error in thread {thread_id}: {e}")
         finally:
+            # Siempre cerrar el socket del cliente
             try:
                 client_sock.close()
+                logging.debug(f"Thread {thread_id} closed client socket")
             except:
                 pass
+            
+            # Remover este thread de la lista de activos
+            with self.threads_lock:
+                current_thread = threading.current_thread()
+                if current_thread in self.active_threads:
+                    self.active_threads.remove(current_thread)
+                    logging.debug(f"Thread {thread_id} removed from active list")
 
     def __handle_client_connection(self, client_sock):
-        """Maneja una conexion del cliente (ahora thread-safe)"""
+        """Maneja una conexión del cliente (thread-safe)"""
         try:
-            # recibo el mensaje
+            # Recibo el mensaje
             msg = recv_message(client_sock)
-            # veo que tipo de mensaje es
+            
+            # Verifico que tipo de mensaje es
             msg_type = msg[0]
-            logging.debug(f"Message type received: {msg_type:#x} from msg length {len(msg)}")
+            logging.debug(f"Thread {threading.current_thread().name} - Message type: {msg_type:#x}")
+            
             if msg_type == MESSAGE_TYPE_BATCH:
-                # es un batch de apuestas
+                # Es un batch de apuestas
                 self.__handle_batch(client_sock, msg)
+                
             elif msg_type == MESSAGE_TYPE_DONE:
-                logging.debug("DONE message received")  # agencia termino de mandar
+                # Agencia terminó de mandar
+                logging.debug(f"Thread {threading.current_thread().name} - DONE message received")
                 self.__handle_done(client_sock, msg)
+                
             elif msg_type == MESSAGE_TYPE_GET_WINNERS:
-                # agencia pide ganadores
+                # Agencia pide ganadores
                 self.__handle_get_winners(client_sock, msg)
+                
             else:
                 logging.warning(f"Unknown message type: {msg_type}")
+                
         except Exception as e:
-            logging.error(f"Error handling client: {e}")
+            logging.error(f"Error handling client in thread {threading.current_thread().name}: {e}")
 
     def __handle_batch(self, client_sock, msg):
-        """Procesa un batch (ahora thread-safe)"""
+        """Procesa un batch de apuestas (thread-safe)"""
+        thread_name = threading.current_thread().name
         try:
-            # deserializo el batch
+            # Deserializo el batch
             bets_data = deserialize_batch(msg)
+            
             if bets_data:
                 agency_id = bets_data[0]['agency_id']
-                # proteger acceso a known_agencies
+                
+                # Proteger acceso a known_agencies
                 with self.state_lock:
                     self.known_agencies.add(agency_id)
-                logging.debug(f"known agencies so far: {self.known_agencies}")
-                # convierto a objetos Bet
+                    known_count = len(self.known_agencies)
+                
+                logging.debug(f"Thread {thread_name} - Known agencies: {known_count}")
+                
+                # Convertir a objetos Bet
                 bets = []
                 for bet_data in bets_data:
                     bet = Bet(
@@ -157,16 +203,20 @@ class Server:
                         number=str(bet_data['number'])
                     )
                     bets.append(bet)
-                # proteger store_bets con lock
+                
+                # Proteger store_bets con lock
                 with self.storage_lock:
                     store_bets(bets)
-                # respondo con el ultimo numero
+                
+                # Responder con el último número
                 last_number = bets_data[-1]['number']
                 response = int_to_bytes(last_number, 4)
                 send_message(client_sock, response)
+                
                 logging.info(f"action: apuesta_recibida | result: success | cantidad: {len(bets)}")
+                
         except Exception as e:
-            logging.error(f"action: apuesta_recibida | result: fail | error: {e}")
+            logging.error(f"Thread {thread_name} - apuesta_recibida | result: fail | error: {e}")
             try:
                 response = int_to_bytes(0, 4)
                 send_message(client_sock, response)
@@ -174,85 +224,111 @@ class Server:
                 pass
 
     def __handle_done(self, client_sock, msg):
-        """Maneja DONE message (thread-safe)"""
+        """Maneja mensaje DONE (thread-safe)"""
+        thread_name = threading.current_thread().name
         try:
             agency_id = msg[1]
-            # proteger acceso al estado compartido
+            
+            # Proteger acceso al estado compartido
             should_do_lottery = False
+            
             with self.state_lock:
                 self.agencies_done.add(agency_id)
-                logging.debug(f"Agency {agency_id} finished. Total done: {len(self.agencies_done)}/{len(self.known_agencies)}")
-                # si debemos hacer el sorteo
-                if not self.lottery_done and len(self.known_agencies) >= self.expected_agencies:
-                    if len(self.agencies_done) == len(self.known_agencies):
+                done_count = len(self.agencies_done)
+                known_count = len(self.known_agencies)
+                
+                logging.debug(f"Thread {thread_name} - Agency {agency_id} done. Total: {done_count}/{known_count}")
+                
+                # Verificar si debemos hacer el sorteo
+                if not self.lottery_done and known_count >= self.expected_agencies:
+                    if done_count == known_count:
                         should_do_lottery = True
-                        logging.debug(f"All {len(self.known_agencies)} agencies finished. Will start lottery.")
+                        logging.debug(f"Thread {thread_name} - All {known_count} agencies finished. Will start lottery.")
+            
             # Enviar ACK
             response = bytes([0x01])
             send_message(client_sock, response)
-            # hacer sorteo fuera del lock si es necesario
+            
+            # Hacer sorteo fuera del lock si es necesario
             if should_do_lottery:
                 self.__do_lottery()
+                
         except Exception as e:
-            logging.error(f"Error handling DONE: {e}")
+            logging.error(f"Thread {thread_name} - Error handling DONE: {e}")
 
     def __do_lottery(self):
-        """Hace el sorteo cuando terminaron todas las agencias"""
+        """Realiza el sorteo cuando todas las agencias terminaron"""
+        thread_name = threading.current_thread().name
         logging.info("action: sorteo | result: success")
-        # crgar apuestas
+        
+        # Cargar todas las apuestas
         with self.storage_lock:
             all_bets = list(load_bets())
-        logging.debug(f"Loaded {len(all_bets)} bets for lottery")
-        # busco los ganadores
+        
+        logging.debug(f"Thread {thread_name} - Loaded {len(all_bets)} bets for lottery")
+        
+        # Buscar los ganadores
         winners_temp = {}
         for bet in all_bets:
             if has_won(bet):
-                # si es ganador, lo agrego a su agencia
+                # Si es ganador, agregarlo a su agencia
                 if bet.agency not in winners_temp:
                     winners_temp[bet.agency] = []
                 winners_temp[bet.agency].append(bet.document)
-        # actualizar estado y notificar threads esperando
+        
+        # Actualizar estado y notificar threads esperando
         with self.lottery_condition:
             self.winners = winners_temp
             self.lottery_done = True
-            # notificar a todos los threads esperando el sorteo
+            # Notificar a TODOS los threads esperando el sorteo
             self.lottery_condition.notify_all()
-        # debug: cuantos ganadores por agencia
-        for agency, winners in self.winners.items():
-            logging.debug(f"Agency {agency}: {len(winners)} winners")
+        
+        # Debug: mostrar cuántos ganadores por agencia
+        for agency, agency_winners in self.winners.items():
+            logging.debug(f"Agency {agency}: {len(agency_winners)} winners")
 
     def __handle_get_winners(self, client_sock, msg):
-        """Responde consulta de ganadores"""
+        """Responde consulta de ganadores (thread-safe)"""
+        thread_name = threading.current_thread().name
         try:
-            # saco el agency_id
+            # Extraer el agency_id
             agency_id = msg[1]
-            # esperar a que el sorteo este listo
+            
+            # Esperar a que el sorteo esté listo
             with self.lottery_condition:
-                # si el sorteo no está listo, esperamos
+                # Mientras el sorteo no esté listo Y el servidor siga corriendo
                 while not self.lottery_done and self._running:
-                    logging.debug(f"Agency {agency_id} waiting for lottery...")
-                    # esperar con timeout para poder chequear _running
-                    if not self.lottery_condition.wait(timeout=0.5):
-                        # timeout, verificar si seguimos corriendo
+                    logging.debug(f"Thread {thread_name} - Agency {agency_id} waiting for lottery...")
+                    
+                    # wait con timeout para poder chequear _running periódicamente
+                    notified = self.lottery_condition.wait(timeout=0.5)
+                    
+                    if not notified:
+                        # Timeout expiró, verificar si seguimos corriendo
                         if not self._running:
-                            # shutting down
+                            # Server shutting down
                             response = bytes([MESSAGE_TYPE_NOT_READY])
                             send_message(client_sock, response)
                             return
-                # el sorteo está listo o el server está cerrando
+                
+                # Salimos del loop: o el sorteo está listo o el server está cerrando
                 if not self.lottery_done:
                     response = bytes([MESSAGE_TYPE_NOT_READY])
                     send_message(client_sock, response)
                     return
-                # busco ganadores de esta agencia (dentro del lock)
+                
+                # Buscar ganadores de esta agencia (dentro del lock)
                 agency_winners = self.winners.get(agency_id, [])
-            # armo la respuesta (fuera del lock)
+            
+            # Armar la respuesta (fuera del lock para no bloquear otros threads)
             response = serialize_winners(agency_winners)
             send_message(client_sock, response)
-            logging.debug(f"Sent {len(agency_winners)} winners to agency {agency_id}")
+            
+            logging.debug(f"Thread {thread_name} - Sent {len(agency_winners)} winners to agency {agency_id}")
+            
         except Exception as e:
-            logging.error(f"Error handling GET_WINNERS: {e}")
-            # si hay error, mando respuesta vacia
+            logging.error(f"Thread {thread_name} - Error handling GET_WINNERS: {e}")
+            # Si hay error, mandar respuesta vacía
             try:
                 response = bytes([MESSAGE_TYPE_NOT_READY])
                 send_message(client_sock, response)
@@ -273,3 +349,4 @@ class Server:
             if not self._running:
                 logging.debug("Accept interrupted by shutdown")
                 return None
+            raise
