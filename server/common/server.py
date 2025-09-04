@@ -2,8 +2,8 @@ import socket
 import logging
 import signal
 import sys
-from .protocol import receive_batch, send_message
-from .utils import Bet, store_bets
+from .protocol import *
+from .utils import Bet, store_bets, load_bets, has_won
 
 class Server:
     def __init__(self, port, listen_backlog):
@@ -15,6 +15,10 @@ class Server:
         
         # Flag for graceful shutdown
         self._running = True
+        
+        self.agencies_done = set()  
+        self.lottery_done = False   # ya hice el sorteo?
+        self.winners = {}           
         
         # Register signal handler for SIGTERM
         signal.signal(signal.SIGTERM, self._handle_sigterm)
@@ -60,10 +64,37 @@ class Server:
         logging.info('action: graceful_shutdown | result: success')
 
     def __handle_client_connection(self, client_sock):
+        """Manage one client connection"""
         try:
-            # receive the batch
-            bets_data = receive_batch(client_sock)
+            # recibo el mensaje
+            msg = recv_message(client_sock)
             
+            # veo que tipo de mensaje es
+            msg_type = msg[0]
+            
+            if msg_type == MESSAGE_TYPE_BATCH:
+                # es un batch de apuestas
+                self.__handle_batch(client_sock, msg)
+            elif msg_type == MESSAGE_TYPE_DONE:
+                # agencia termino de mandar
+                self.__handle_done(client_sock, msg)
+            elif msg_type == MESSAGE_TYPE_GET_WINNERS:
+                # agencia pide ganadores
+                self.__handle_get_winners(client_sock, msg)
+            else:
+                logging.warning(f"Unknown message type: {msg_type}")
+                
+        except Exception as e:
+            logging.error(f"Error handling client: {e}")
+        finally:
+            client_sock.close()
+
+    def __handle_batch(self, client_sock, msg):
+        """Process a batch as before"""
+        try:
+            # deserialize the batch
+            bets_data = deserialize_batch(msg)
+
             # convert to Bet objects
             bets = []
             for bet_data in bets_data:
@@ -77,26 +108,90 @@ class Server:
                 )
                 bets.append(bet)
             
-            # store all bets in the batch
+            # guardo las apuestas
             store_bets(bets)
             
-            from .protocol import int_to_bytes
+            # respondo con el ultimo numero
             last_number = bets_data[-1]['number']
-            response = int_to_bytes(last_number, 4) 
+            response = int_to_bytes(last_number, 4)
             send_message(client_sock, response)
             
             logging.info(f"action: apuesta_recibida | result: success | cantidad: {len(bets)}")
             
         except Exception as e:
             logging.error(f"action: apuesta_recibida | result: fail | error: {e}")
-            try:
-                response = int_to_bytes(0, 4)  
-                send_message(client_sock, response)
-            except:
-                pass
-        finally:
-            client_sock.close()
+            # mando error
+            response = int_to_bytes(0, 4)
+            send_message(client_sock, response)
 
+    def __handle_done(self, client_sock, msg):
+        """Manage when an agency is done"""
+        try:
+            # saco el agency_id del mensaje
+            agency_id = msg[1]
+            
+            # marco que termino
+            self.agencies_done.add(agency_id)
+            logging.debug(f"Agency {agency_id} finished. Total done: {len(self.agencies_done)}")
+            
+            # respondo OK
+            response = bytes([0x01])
+            send_message(client_sock, response)
+            
+            # veo si ya terminaron las 5
+            if len(self.agencies_done) == 5 and not self.lottery_done:
+                self.__do_lottery()
+                
+        except Exception as e:
+            logging.error(f"Error handling DONE: {e}")
+
+    def __do_lottery(self):
+        """hace el sorteo cuando terminaron las 5 agencias"""
+        logging.info("action: sorteo | result: success")
+        
+        # cargo todas las apuestas
+        all_bets = list(load_bets())
+        logging.debug(f"Loaded {len(all_bets)} bets for lottery")
+        
+        # busco los ganadores
+        self.winners = {}
+        for bet in all_bets:
+            if has_won(bet):
+                # si es ganador, lo agrego a su agencia
+                if bet.agency not in self.winners:
+                    self.winners[bet.agency] = []
+                self.winners[bet.agency].append(bet.document)
+        
+        self.lottery_done = True
+        
+        # debug:cuantos ganadores por agencia
+        for agency, winners in self.winners.items():
+            logging.debug(f"Agency {agency}: {len(winners)} winners")
+
+    def __handle_get_winners(self, client_sock, msg):
+        """Responde consulta de ganadores"""
+        try:
+            # saco el agency_id
+            agency_id = msg[1]
+            
+            if not self.lottery_done:
+                # sorteo no listo todavia
+                response = bytes([MESSAGE_TYPE_NOT_READY])
+                send_message(client_sock, response)
+                logging.debug(f"Agency {agency_id} asked for winners but lottery not ready")
+                return
+            
+            # busco ganadores de esta agencia
+            agency_winners = self.winners.get(agency_id, [])
+            
+            # armo la respuesta
+            response = serialize_winners(agency_winners)
+            send_message(client_sock, response)
+            
+            logging.debug(f"Sent {len(agency_winners)} winners to agency {agency_id}")
+            
+        except Exception as e:
+            logging.error(f"Error handling GET_WINNERS: {e}")
 
     def __accept_new_connection(self):
         """
