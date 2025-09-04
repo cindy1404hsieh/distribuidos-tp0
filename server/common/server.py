@@ -193,7 +193,7 @@ class Server:
                 logging.debug(f"Agency {agency_id} finished. Total done: {len(self.agencies_done)}/{len(self.known_agencies)}")
 
                 # si debemos hacer el sorteo
-                if not self.lottery_done and len(self.known_agencies) >= 3:
+                if not self.lottery_done and len(self.known_agencies) >= 5:
                     if len(self.agencies_done) == len(self.known_agencies):
                         should_do_lottery = True
                         logging.debug(f"All {len(self.known_agencies)} agencies finished. Will start lottery.")
