@@ -172,7 +172,7 @@ func (c *Client) sendDone() error {
 
 func (c *Client) getWinners() []string {
     agencyID, _ := strconv.ParseUint(c.config.ID, 10, 8)
-    
+    asdasdad
     // reintento hasta que este el sorteo
     for {
         // check si me pidieron terminar

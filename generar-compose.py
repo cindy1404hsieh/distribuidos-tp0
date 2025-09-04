@@ -13,7 +13,7 @@ def generate_docker_compose(output_file, client_count):
     yaml_content.append("    entrypoint: python3 /main.py")
     yaml_content.append("    environment:")
     yaml_content.append("      - PYTHONUNBUFFERED=1")
-    #yaml_content.append(f"      - EXPECTED_AGENCIES={client_count}")
+    yaml_content.append(f"      - EXPECTED_AGENCIES={client_count}")
     yaml_content.append("    networks:")
     yaml_content.append("      - testing_net")
     yaml_content.append("    volumes:")
