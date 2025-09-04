@@ -255,12 +255,7 @@ func (c *Client) readBets() ([]BetData, error) {
     filename := fmt.Sprintf("/data/agency-%s.csv", c.config.ID)
     file, err := os.Open(filename)
     if err != nil {
-        filename = fmt.Sprintf("agency-%s.csv", c.config.ID) 
-        file, err = os.Open(filename)
-        if err != nil {
-            log.Warningf("Could not open CSV file: %v", err)
-            return []BetData{}, nil 
-        }
+        return nil, err
     }
     defer file.Close()
     
@@ -273,19 +268,8 @@ func (c *Client) readBets() ([]BetData, error) {
         if err != nil {
             break // EOF or error
         }
-        
-        if len(record) < 5 {
-            log.Warningf("Invalid CSV record: %v", record)
-            continue
-        }
-        
         // parse the number
-        num, err := strconv.ParseUint(record[4], 10, 32)
-        if err != nil {
-            log.Warningf("Could not parse number %s: %v", record[4], err)
-            continue
-        }
-        
+        num, _ := strconv.ParseUint(record[4], 10, 32)
         bet := BetData{
             FirstName: record[0],
             LastName:  record[1],
