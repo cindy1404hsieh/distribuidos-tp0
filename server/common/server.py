@@ -67,7 +67,7 @@ class Server:
                     if not self._running:
                         break
                     raise
-                
+
         finally:
             self.__cleanup()
 
@@ -158,16 +158,20 @@ class Server:
             should_do_lottery = False
             with self.state_lock:
                 self.agencies_done.add(agency_id)
-                logging.debug(f"Agency {agency_id} finished. Total done: {len(self.agencies_done)}/{len(self.known_agencies)}")
-                if not self.lottery_done and len(self.known_agencies) >= 3:
-                    if len(self.agencies_done) == len(self.known_agencies):
+                logging.debug(
+                    f"Agency {agency_id} finished. Total done: {len(self.agencies_done)}/{len(self.known_agencies)}"
+                )
+                if not self.lottery_done and len(self.known_agencies) >= 1: 
+                    if len(self.agencies_done) == self.expected_agencies or len(self.agencies_done) == len(self.known_agencies):
                         should_do_lottery = True
-                        logging.debug(f"All {len(self.known_agencies)} agencies finished. Will start lottery.")
-            
+                        logging.debug(f"All expected agencies finished. Will start lottery.")
+
             response = bytes([0x01])
             send_message(client_sock, response)
+            
             if should_do_lottery:
                 self.__do_lottery()
+
         except Exception as e:
             logging.error(f"Error handling DONE: {e}")
 
