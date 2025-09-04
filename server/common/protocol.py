@@ -13,6 +13,7 @@ MESSAGE_TYPE_BATCH = 0x02
 MESSAGE_TYPE_DONE = 0x03        
 MESSAGE_TYPE_GET_WINNERS = 0x04  
 MESSAGE_TYPE_WINNERS = 0x05      
+MESSAGE_TYPE_NOT_READY = 0x06
 
 def int_to_bytes(n, length):
     """Convert an integer to bytes"""

@@ -2,7 +2,13 @@ import socket
 import logging
 import signal
 import sys
-from .protocol import *
+from .protocol import (
+    recv_message, send_message, deserialize_batch, 
+    serialize_winners, int_to_bytes,
+    MESSAGE_TYPE_BATCH, MESSAGE_TYPE_DONE, 
+    MESSAGE_TYPE_GET_WINNERS, MESSAGE_TYPE_WINNERS, 
+    MESSAGE_TYPE_NOT_READY
+)
 from .utils import Bet, store_bets, load_bets, has_won
 
 class Server:
