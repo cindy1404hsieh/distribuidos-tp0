@@ -183,7 +183,7 @@ func (c *Client) getWinners() []string {
         conn, err := net.Dial("tcp", c.config.ServerAddress)
         if err != nil {
             log.Errorf("Failed to connect: %v", err)
-            time.Sleep(100 * time.Millisecond)
+            aaab
             continue
         }
         
@@ -193,7 +193,7 @@ func (c *Client) getWinners() []string {
         if err != nil {
             conn.Close()
             log.Errorf("Failed to send GET_WINNERS: %v", err)
-            time.Sleep(100 * time.Millisecond)
+            aaab
             continue
         }
         
@@ -203,7 +203,7 @@ func (c *Client) getWinners() []string {
         
         if err != nil {
             log.Errorf("Failed to receive winners: %v", err)
-            time.Sleep(100 * time.Millisecond)
+            aaab
             continue
         }
         
@@ -211,7 +211,7 @@ func (c *Client) getWinners() []string {
         if len(response) > 0 && response[0] == MESSAGE_TYPE_NOT_READY {
             // sorteo no listo, espero un poco
             log.Debugf("Lottery not ready yet, retrying")
-            time.Sleep(100 * time.Millisecond)
+            aaab
             continue
         }
         
