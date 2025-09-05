@@ -136,6 +136,12 @@ func (c *Client) StartClientLoop() {
 
 // función para procesar bets en streaming
 func (c *Client) processBetsStreaming(reader *csv.Reader, maxBatchSize int, totalBets *int) error {
+    conn, err := net.Dial("tcp", c.config.ServerAddress)
+    if err != nil {
+        log.Errorf("action: connect | result: fail | client_id: %v | error: %v", c.config.ID, err)
+        return err
+    }
+    defer conn.Close()
     batch := make([]BetData, 0, maxBatchSize)
     
     for c.running {
@@ -198,14 +204,7 @@ func (c *Client) processBetsStreaming(reader *csv.Reader, maxBatchSize int, tota
 }
 // función auxiliar para enviar un batch
 func (c *Client) sendBatchToServer(batch []BetData) error {
-    conn, err := net.Dial("tcp", c.config.ServerAddress)
-    if err != nil {
-        log.Errorf("action: connect | result: fail | client_id: %v | error: %v", c.config.ID, err)
-        return err
-    }
-    defer conn.Close()
-    
-    err = c.sendBatch(conn, batch)
+    err := c.sendBatch(conn, batch)
     if err != nil {
         log.Errorf("action: send_batch | result: fail | client_id: %v | error: %v", c.config.ID, err)
         return err
