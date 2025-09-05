@@ -1,4 +1,3 @@
-# server/common/protocol.py
 """
 Communication protocol for the lottery system
 """

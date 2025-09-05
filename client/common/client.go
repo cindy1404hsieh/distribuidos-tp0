@@ -11,6 +11,7 @@ import (
 	"encoding/csv"
 	"encoding/binary"
 	"github.com/op/go-logging"
+    "io"
 )
 
 var log = logging.MustGetLogger("log")
@@ -87,13 +88,16 @@ func (c *Client) StartClientLoop() {
     }()
     
     // read bets from CSV
-    bets, err := c.readBets()
+    filename := fmt.Sprintf("/data/agency-%s.csv", c.config.ID)
+    file, err := os.Open(filename)
     if err != nil {
-        log.Errorf("action: read_csv | result: fail | client_id: %v | error: %v", c.config.ID, err)
+        log.Errorf("action: open_csv | result: fail | client_id: %v | error: %v", c.config.ID, err)
         return
     }
+    defer file.Close()
     
-    log.Infof("Read %d bets from file", len(bets))
+    reader := csv.NewReader(file)
+    
     
     // get max batch size from config
     maxBatchSize := c.config.BatchMaxAmount  
@@ -101,33 +105,14 @@ func (c *Client) StartClientLoop() {
         maxBatchSize = 50 
     }
     
-    // process bet in batches 
-    if len(bets) > 0 {
-        for i := 0; i < len(bets) && c.running; i += maxBatchSize {
-            end := i + maxBatchSize
-            if end > len(bets) {
-                end = len(bets)
-            }
-            
-            batch := bets[i:end]
-            
-            conn, err := net.Dial("tcp", c.config.ServerAddress)
-            if err != nil {
-                log.Errorf("action: connect | result: fail | client_id: %v | error: %v", c.config.ID, err)
-                continue
-            }
-            
-            err = c.sendBatch(conn, batch)
-            conn.Close()
-            
-            if err != nil {
-                log.Errorf("action: send_batch | result: fail | client_id: %v | error: %v", c.config.ID, err)
-            } else {
-                log.Debugf("action: batch_sent | result: success | size: %d", len(batch))
-            }
-        }
+    // Procesar el CSV en streaming
+    totalBets := 0
+    err = c.processBetsStreaming(reader, maxBatchSize, &totalBets)
+    if err != nil && err != io.EOF {
+        log.Errorf("action: process_bets | result: fail | client_id: %v | error: %v", c.config.ID, err)
+        return
     }
-
+    log.Infof("Processed total of %d bets", totalBets)
     // si me interrumpieron, termino
     if !c.running {
         log.Infof("action: graceful_shutdown | result: success | client_id: %v", c.config.ID)
@@ -149,6 +134,86 @@ func (c *Client) StartClientLoop() {
     log.Infof("action: loop_finished | result: success | client_id: %v", c.config.ID)
 }
 
+// función para procesar bets en streaming
+func (c *Client) processBetsStreaming(reader *csv.Reader, maxBatchSize int, totalBets *int) error {
+    batch := make([]BetData, 0, maxBatchSize)
+    
+    for c.running {
+        record, err := reader.Read()
+        
+        // Si encontramos EOF o error, procesamos el batch pendiente si existe
+        if err == io.EOF {
+            if len(batch) > 0 {
+                if err := c.sendBatchToServer(batch); err != nil {
+                    return err
+                }
+                *totalBets += len(batch)
+            }
+            return nil // EOF es normal, no es un error
+        }
+        
+        if err != nil {
+            // Otro tipo de error en el CSV
+            return err
+        }
+        
+        // Parsear el registro
+        num, err := strconv.ParseUint(record[4], 10, 32)
+        if err != nil {
+            log.Warningf("Invalid number in CSV: %s, skipping", record[4])
+            continue
+        }
+        
+        bet := BetData{
+            FirstName: record[0],
+            LastName:  record[1],
+            DNI:       record[2],
+            BirthDate: record[3],
+            Number:    uint32(num),
+        }
+        
+        batch = append(batch, bet)
+        
+        // Si el batch está lleno, lo enviamos
+        if len(batch) >= maxBatchSize {
+            if err := c.sendBatchToServer(batch); err != nil {
+                return err
+            }
+            *totalBets += len(batch)
+            
+            // Crear un nuevo batch vacío (reutilizando el slice capacity)
+            batch = batch[:0]
+        }
+    }
+    
+    // Si nos interrumpieron, procesar batch pendiente
+    if len(batch) > 0 && c.running {
+        if err := c.sendBatchToServer(batch); err != nil {
+            return err
+        }
+        *totalBets += len(batch)
+    }
+    
+    return nil
+}
+// función auxiliar para enviar un batch
+func (c *Client) sendBatchToServer(batch []BetData) error {
+    conn, err := net.Dial("tcp", c.config.ServerAddress)
+    if err != nil {
+        log.Errorf("action: connect | result: fail | client_id: %v | error: %v", c.config.ID, err)
+        return err
+    }
+    defer conn.Close()
+    
+    err = c.sendBatch(conn, batch)
+    if err != nil {
+        log.Errorf("action: send_batch | result: fail | client_id: %v | error: %v", c.config.ID, err)
+        return err
+    }
+    
+    log.Debugf("action: batch_sent | result: success | size: %d", len(batch))
+    return nil
+}
 func (c *Client) sendDone() error {
     conn, err := net.Dial("tcp", c.config.ServerAddress)
     if err != nil {
@@ -249,39 +314,7 @@ func parseWinners(data []byte) []string {
     return winners
 }
 
-func (c *Client) readBets() ([]BetData, error) {
-    // open the csv file
-    filename := fmt.Sprintf("/data/agency-%s.csv", c.config.ID)
-    file, err := os.Open(filename)
-    if err != nil {
-        return nil, err
-    }
-    defer file.Close()
-    
-    reader := csv.NewReader(file)
-    
-    var bets []BetData
-    
-    for {
-        record, err := reader.Read()
-        if err != nil {
-            break // EOF or error
-        }
-        // parse the number
-        num, _ := strconv.ParseUint(record[4], 10, 32)
-        bet := BetData{
-            FirstName: record[0],
-            LastName:  record[1],
-            DNI:       record[2],
-            BirthDate: record[3],
-            Number:    uint32(num),
-        }
-        bets = append(bets, bet)
-    }
-    
-    log.Infof("Read %d bets from file %s", len(bets), filename)
-    return bets, nil
-}
+
 
 func (c *Client) sendBatch(conn net.Conn, batch []BetData) error {
     agencyID, _ := strconv.ParseUint(c.config.ID, 10, 8)
