@@ -158,29 +158,36 @@ class Server:
     def __handle_client_connection(self, client_sock):
         """Maneja una conexión del cliente (thread-safe)"""
         try:
-            # Recibo el mensaje
-            msg = recv_message(client_sock)
+            client_sock.settimeout(1.0)
             
-            # Verifico que tipo de mensaje es
-            msg_type = msg[0]
-            logging.debug(f"Thread {threading.current_thread().name} - Message type: {msg_type:#x}")
-            
-            if msg_type == MESSAGE_TYPE_BATCH:
-                # Es un batch de apuestas
-                self.__handle_batch(client_sock, msg)
-                
-            elif msg_type == MESSAGE_TYPE_DONE:
-                # Agencia terminó de mandar
-                logging.debug(f"Thread {threading.current_thread().name} - DONE message received")
-                self.__handle_done(client_sock, msg)
-                
-            elif msg_type == MESSAGE_TYPE_GET_WINNERS:
-                # Agencia pide ganadores
-                self.__handle_get_winners(client_sock, msg)
-                
-            else:
-                logging.warning(f"Unknown message type: {msg_type}")
-                
+            # Ahora intentar recibir con timeout
+            while self._running:  
+                try:
+                    msg = recv_message(client_sock)
+                    
+                    # Si recibimos mensaje, procesarlo
+                    msg_type = msg[0]
+                    logging.debug(f"Thread {threading.current_thread().name} - Message type: {msg_type:#x}")
+                    
+                    if msg_type == MESSAGE_TYPE_BATCH:
+                        self.__handle_batch(client_sock, msg)
+                    elif msg_type == MESSAGE_TYPE_DONE:
+                        logging.debug(f"Thread {threading.current_thread().name} - DONE message received")
+                        self.__handle_done(client_sock, msg)
+                    elif msg_type == MESSAGE_TYPE_GET_WINNERS:
+                        self.__handle_get_winners(client_sock, msg)
+                    else:
+                        logging.warning(f"Unknown message type: {msg_type}")
+                    
+                    break  
+                    
+                except socket.timeout:
+                    if not self._running:
+                        logging.debug("Server shutting down, thread exiting")
+                        return
+                    # Si no, continuar esperando
+                    continue
+                    
         except Exception as e:
             logging.error(f"Error handling client in thread {threading.current_thread().name}: {e}")
 
