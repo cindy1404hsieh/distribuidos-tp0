@@ -40,7 +40,9 @@ class Server:
         self.storage_lock = threading.Lock()  # Para proteger store_bets/load_bets
         self.state_lock = threading.Lock()    # Para proteger estado compartido
         self.lottery_condition = threading.Condition(self.state_lock)  # Para notificar sorteo
-
+        self.max_threads = 10  
+        self.active_count = 0
+        self.count_lock = threading.Lock()
         # Lista manual de threads activos
         self.active_threads = []
         self.threads_lock = threading.Lock()  # Para proteger la lista de threads
@@ -70,6 +72,12 @@ class Server:
                 try:
                     client_sock = self.__accept_new_connection()
                     if client_sock:
+                        with self.count_lock:
+                            if self.active_count >= self.max_threads:
+                                logging.warning(f"Max threads reached ({self.max_threads}), rejecting connection")
+                                client_sock.close()
+                                continue
+                            self.active_count += 1
                         # Crear y lanzar un thread manualmente para cada conexión
                         thread = threading.Thread(
                             target=self.__handle_client_thread,
@@ -144,6 +152,8 @@ class Server:
                 if current_thread in self.active_threads:
                     self.active_threads.remove(current_thread)
                     logging.debug(f"Thread {thread_id} removed from active list")
+            with self.count_lock:
+                self.active_count -= 1
 
     def __handle_client_connection(self, client_sock):
         """Maneja una conexión del cliente (thread-safe)"""
