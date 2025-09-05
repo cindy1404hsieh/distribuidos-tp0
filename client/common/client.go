@@ -87,18 +87,6 @@ func (c *Client) StartClientLoop() {
         log.Infof("action: sigterm_received | result: in_progress | client_id: %v", c.config.ID)
         c.running = false
     }()
-    conn, err := net.Dial("tcp", c.config.ServerAddress)
-    if err != nil {
-        log.Errorf("action: initial_connect | result: fail | client_id: %v | error: %v", c.config.ID, err)
-        return
-    }
-    c.conn = conn
-    defer func() {
-        if c.conn != nil {
-            c.conn.Close()
-            log.Debugf("action: close_connection | result: success | client_id: %v", c.config.ID)
-        }
-    }()
 
     // read bets from CSV
     filename := fmt.Sprintf("/data/agency-%s.csv", c.config.ID)
@@ -120,63 +108,63 @@ func (c *Client) StartClientLoop() {
     
     // Procesar el CSV en streaming
     totalBets := 0
-    err = c.processBetsStreaming(reader, maxBatchSize, &totalBets)
+    err = c.sendAllBatchesOptimized(reader, maxBatchSize, &totalBets)
     if err != nil && err != io.EOF {
         log.Errorf("action: process_bets | result: fail | client_id: %v | error: %v", c.config.ID, err)
         return
     }
+    
     log.Infof("Processed total of %d bets", totalBets)
-    // si me interrumpieron, termino
+    
     if !c.running {
         log.Infof("action: graceful_shutdown | result: success | client_id: %v", c.config.ID)
         return
     }
 
+    // DONE y GET_WINNERS usan conexiones separadas
     err = c.sendDone()
     if err != nil {
         log.Errorf("action: send_done | result: fail | client_id: %v | error: %v", c.config.ID, err)
-        c.conn.Close()
-        c.conn = nil
-        
-        newConn, err := net.Dial("tcp", c.config.ServerAddress)
-        if err == nil {
-            c.conn = newConn
-            err = c.sendDone()
-        }
-        
-        if err != nil {
-            log.Errorf("action: send_done_retry | result: fail | client_id: %v | error: %v", c.config.ID, err)
-            return
-        }
+        return
     }
-    log.Debugf("Agency %s sent DONE message", c.config.ID)
     
-    // para getWinners necesito cerrar la conexión actual y usar una nueva
-    // porque el servidor cierra la conexión después de cada mensaje
-    if c.conn != nil {
-        c.conn.Close()
-        c.conn = nil
-    }
+    log.Debugf("Agency %s sent DONE message", c.config.ID)
     
     winners := c.getWinners()
     log.Infof("action: consulta_ganadores | result: success | cant_ganadores: %d", len(winners))
     
-    // Clean shutdown
     log.Infof("action: loop_finished | result: success | client_id: %v", c.config.ID)
 }
-
-// función para procesar bets en streaming
-func (c *Client) processBetsStreaming(reader *csv.Reader, maxBatchSize int, totalBets *int) error {
+func (c *Client) sendAllBatchesOptimized(reader *csv.Reader, maxBatchSize int, totalBets *int) error {
+    // Abrir UNA conexión para TODOS los batches
+    conn, err := net.Dial("tcp", c.config.ServerAddress)
+    if err != nil {
+        return fmt.Errorf("failed to connect: %v", err)
+    }
+    defer conn.Close()
+    
     batch := make([]BetData, 0, maxBatchSize)
+    consecutiveErrors := 0
+    maxConsecutiveErrors := 3
     
     for c.running {
         record, err := reader.Read()
         
-        // Si encontramos EOF o error, procesamos el batch pendiente si existe
         if err == io.EOF {
+            // Enviar último batch si existe
             if len(batch) > 0 {
-                if err := c.sendBatchToServer(batch); err != nil {
-                    return err
+                if err := c.sendBatch(conn, batch); err != nil {
+                    // En EOF, si falla el último batch, reconectar
+                    conn.Close()
+                    newConn, reconnectErr := net.Dial("tcp", c.config.ServerAddress)
+                    if reconnectErr != nil {
+                        return fmt.Errorf("failed to reconnect for last batch: %v", reconnectErr)
+                    }
+                    conn = newConn
+                    // Reintentar
+                    if err := c.sendBatch(conn, batch); err != nil {
+                        return err
+                    }
                 }
                 *totalBets += len(batch)
             }
@@ -204,32 +192,96 @@ func (c *Client) processBetsStreaming(reader *csv.Reader, maxBatchSize int, tota
         
         batch = append(batch, bet)
         
-        // Si el batch está lleno, lo enviamos
         if len(batch) >= maxBatchSize {
-            if err := c.sendBatchToServer(batch); err != nil {
-                // Si falla, intentamos reconectar UNA vez
-                log.Warningf("Connection failed, attempting reconnect...")
-                if c.conn != nil {
-                    c.conn.Close()
+            // Intentar enviar con la conexión actual
+            err := c.sendBatch(conn, batch)
+            
+            if err != nil {
+                consecutiveErrors++
+                log.Warningf("Batch send failed (attempt %d/%d): %v", 
+                    consecutiveErrors, maxConsecutiveErrors, err)
+                
+                if consecutiveErrors >= maxConsecutiveErrors {
+                    return fmt.Errorf("too many consecutive errors")
                 }
                 
+                // Reconectar y reintentar
+                conn.Close()
                 newConn, reconnectErr := net.Dial("tcp", c.config.ServerAddress)
                 if reconnectErr != nil {
                     return fmt.Errorf("failed to reconnect: %v", reconnectErr)
                 }
-                c.conn = newConn
+                conn = newConn
                 
-                // Reintentar envío con nueva conexión
-                if err := c.sendBatchToServer(batch); err != nil {
+                // Reintentar con nueva conexión
+                if err := c.sendBatch(conn, batch); err != nil {
                     return fmt.Errorf("failed after reconnect: %v", err)
                 }
+            } else {
+                consecutiveErrors = 0  // Reset en éxito
+            }
+            
+            *totalBets += len(batch)
+            batch = batch[:0]
+        }
+    }
+    
+    // Si nos interrumpieron, enviar batch pendiente
+    if len(batch) > 0 && c.running {
+        // Mejor esfuerzo para el último batch
+        _ = c.sendBatch(conn, batch)
+        *totalBets += len(batch)
+    }
+    
+    return nil
+}
+
+// función para procesar bets en streaming
+func (c *Client) processBetsStreaming(reader *csv.Reader, maxBatchSize int, totalBets *int) error {
+    batch := make([]BetData, 0, maxBatchSize)
+    
+    for c.running {
+        record, err := reader.Read()
+        
+        if err == io.EOF {
+            if len(batch) > 0 {
+                if err := c.sendBatchToServer(batch); err != nil {
+                    return err
+                }
+                *totalBets += len(batch)
+            }
+            return nil
+        }
+        
+        if err != nil {
+            return err
+        }
+        
+        num, err := strconv.ParseUint(record[4], 10, 32)
+        if err != nil {
+            log.Warningf("Invalid number in CSV: %s, skipping", record[4])
+            continue
+        }
+        
+        bet := BetData{
+            FirstName: record[0],
+            LastName:  record[1],
+            DNI:       record[2],
+            BirthDate: record[3],
+            Number:    uint32(num),
+        }
+        
+        batch = append(batch, bet)
+        
+        if len(batch) >= maxBatchSize {
+            if err := c.sendBatchToServer(batch); err != nil {
+                return err
             }
             *totalBets += len(batch)
             batch = batch[:0]
         }
     }
     
-    // Si nos interrumpieron, procesar batch pendiente
     if len(batch) > 0 && c.running {
         if err := c.sendBatchToServer(batch); err != nil {
             return err
@@ -241,11 +293,14 @@ func (c *Client) processBetsStreaming(reader *csv.Reader, maxBatchSize int, tota
 }
 // función auxiliar para enviar batch usando conexión existente
 func (c *Client) sendBatchToServer(batch []BetData) error {
-    if c.conn == nil {
-        return fmt.Errorf("no connection available")
+    conn, err := net.Dial("tcp", c.config.ServerAddress)
+    if err != nil {
+        log.Errorf("action: connect | result: fail | client_id: %v | error: %v", c.config.ID, err)
+        return err
     }
+    defer conn.Close()
     
-    err := c.sendBatch(c.conn, batch)
+    err = c.sendBatch(conn, batch)
     if err != nil {
         log.Errorf("action: send_batch | result: fail | client_id: %v | error: %v", c.config.ID, err)
         return err
@@ -275,7 +330,6 @@ func (c *Client) sendDone() error {
 
 func (c *Client) getWinners() []string {
     agencyID, _ := strconv.ParseUint(c.config.ID, 10, 8)
-    retryDelay := 100 * time.Millisecond  
     
     for {
         if !c.running {
@@ -285,38 +339,34 @@ func (c *Client) getWinners() []string {
         conn, err := net.Dial("tcp", c.config.ServerAddress)
         if err != nil {
             log.Errorf("Failed to connect: %v", err)
-            time.Sleep(retryDelay)  
+            time.Sleep(100 * time.Millisecond)  
             continue
         }
         
-        // pido ganadores: [type][agency_id]
         msg := []byte{MESSAGE_TYPE_GET_WINNERS, uint8(agencyID)}
         err = SendMessage(conn, msg)
         if err != nil {
             conn.Close()
             log.Errorf("Failed to send GET_WINNERS: %v", err)
-            time.Sleep(retryDelay)  
+            time.Sleep(100 * time.Millisecond)
             continue
         }
         
-        // recibo respuesta
         response, err := RecvMessage(conn)
         conn.Close()
         
         if err != nil {
             log.Errorf("Failed to receive winners: %v", err)
-            time.Sleep(retryDelay)  
+            time.Sleep(100 * time.Millisecond)
             continue
         }
         
-        // veo que me respondieron
         if len(response) > 0 && response[0] == MESSAGE_TYPE_NOT_READY {
-            log.Debugf("Lottery not ready yet, retrying in %v", retryDelay)
-            time.Sleep(retryDelay)  
+            log.Debugf("Lottery not ready yet, retrying...")
+            time.Sleep(100 * time.Millisecond)  
             continue
         }
         
-        // parseo los ganadores
         return parseWinners(response)
     }
 }
