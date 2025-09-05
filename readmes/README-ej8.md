@@ -67,3 +67,7 @@ Contador con limite maximo de 10 threads
 
 ### threads bloqueados en recv_message() no detectaban SIGTERM
 ahora Socket con timeout + verificación de flag _running.
+
+### el cliente abría/cerraba una conexión TCP por cada batch 
+Ahora usa una sola conexión para todos los batches.
+Se dejó DONE y GET_WINNERS con conexiones propias porque son mensajes puntuales y no afectan el rendimiento, manteniendo simple la implementación.
