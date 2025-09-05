@@ -54,3 +54,16 @@ make docker-compose-logs
 
 ###  Detener el sistema
 make docker-compose-down
+
+Correcciones
+### El cliente cargaba todo el CSV en memoria antes de procesarlo
+ahora hace procesamiento por streaming - lectura y envío incremental de batches.
+
+### getWinners() hacía polling constante sin delays
+Agregue time.Sleep(100 * time.Millisecond) entre reintentos.
+
+### El servidor creaba threads ilimitados
+Contador con limite maximo de 10 threads
+
+### threads bloqueados en recv_message() no detectaban SIGTERM
+ahora Socket con timeout + verificación de flag _running.
